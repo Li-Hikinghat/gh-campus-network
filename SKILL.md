@@ -254,6 +254,25 @@ opkg list-installed | grep ca-bundle
 更新优先靠 `sysupgrade`；不能刷机就 sideload `ca-bundle` / `ca-certificates`（`Architecture: all`，不挑架构）。
 两条红线：**不要手工往 `/etc/ssl/certs` 塞来路不明的根证书**；**不要轻易给 UA3F 开 `--mitm`**——那等于自己造一张 CA，所有终端都要信任它。
 
+**某个 CA 被攻破时要能立刻止血**（2026-10 的 eMudhra/emSign 就是这么处理的）：
+
+```sh
+# 1) 先确认锚点是谁 —— 不要 grep PEM，base64 里没有可读名字
+openssl crl2pkcs7 -nocrl -certfile /etc/ssl/certs/ca-certificates.crt \
+  | openssl pkcs7 -print_certs -noout | grep -i emsign
+
+# 2) 干跑 → 执行（自动备份 bundle，可重复执行）
+sh tools/distrust-ca.sh emSign
+sh tools/distrust-ca.sh emSign --apply
+
+# 3) 验证：应从 200 变成证书校验失败
+curl -sS https://dv-g3b-emudhra.we-have-a-problem.com/
+```
+
+**别为了"干净"去删交叉签名的老根**（如 `AAA Certificate Services`）——半个互联网挂在它下面。
+经它签发的中间 CA 只能等 CA 自己吊销，OpenSSL 默认不查 CRL，这种情况如实记为已知风险。
+固件升级或重装 `ca-bundle` 会把证书装回来，升级后复查一次。
+
 ## 验收清单
 
 - [ ] `generate_204` = 204
@@ -265,6 +284,7 @@ opkg list-installed | grep ca-bundle
 - [ ] `zone_wan_input` 结尾是 `src_REJECT`，`0.0.0.0` 上无管理端口暴露（第 8 步）
 - [ ] `network.campus.hostname='*'`，`ip maddr show dev <WAN>` 不含 `224.0.0.251`
 - [ ] `ca-bundle` 版本日期不超过 18 个月，`/etc/ssl/certs` 里没有手工塞进去的根证书
+- [ ] 已知被攻破的 CA 已撤销：`curl https://dv-g3b-emudhra.we-have-a-problem.com/` 必须**失败**
 - [ ] **已向用户说明剩余破绽**（UDP / HTTPS SNI / IPv6 / TLS 指纹 / 并发规模，见 `README.md` §5.1），不要让用户误以为已经"隐身"
 - [ ] 断电重启后以上全部自动恢复
 

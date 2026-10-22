@@ -490,6 +490,51 @@ grep -c 'BEGIN CERTIFICATE' /etc/ssl/certs/ca-certificates.crt
 
 > 一句话：库旧不等于马上出事，但它决定了"真出事时你还会不会继续相信骗子"。
 
+### 5.4 实战：撤销对 eMudhra / emSign 的信任（2026-10）
+
+起因：流传的一则通知说印度 CA **eMudhra** 的中间证书出问题。核实后属实——官方说明页在 `https://emudhra.we-have-a-problem.com/`（标题 *eMudhra Intermediate CA Compromise*），页面提供自测：
+
+```sh
+curl https://dv-g3b-emudhra.we-have-a-problem.com/
+# 返回 "Your client successfully connected to the site. That's bad!"
+#   说明你的客户端仍然信任这条链 —— 这是坏消息
+```
+
+**为什么路由器的静态信任库必然中招**：这条链是
+
+```
+leaf → EM DV TLS CA - G3B → emSign Root TLS CA - G3 → emSign ECC Root CA - G3（锚点）
+```
+
+锚点是 `emSign ECC Root CA - G3`，而它就在 2023 年的 `ca-bundle` 里。浏览器靠厂商推送的根证书更新来撤销，**路由器没有这个通道**，所以只能手工删。
+
+移除（一行，自动备份、可回滚）：
+
+```sh
+sh tools/distrust-ca.sh emSign          # 干跑：只列出会被删的证书
+sh tools/distrust-ca.sh emSign --apply  # 执行
+```
+
+实测结果（本机，2026-10-22）：
+
+| 测试域名 | 移除前 | 移除后 |
+|---|---|---|
+| `dv-g3b/dv-g3c/ov-g3b/ov-g3c/ev-g3b/ev-g3c-emudhra.…`（emSign 链） | 200 | **验证失败（000）** ✅ |
+| `*-aaa-emudhra.…`（经 AAA 交叉签名的链） | 200 | **仍然 200** ⚠️ |
+| baidu / qq / aliyun / mirrors.ustc | 200 | 200 |
+
+移除的 4 张根证书：`emSign ECC Root CA - C3`、`emSign ECC Root CA - G3`、`emSign Root CA - C1`、`emSign Root CA - G1`（bundle 从 140 张降到 136 张）。
+
+**必须知道的限制**：`*-aaa-*` 那批仍然可信，因为它们的锚点是 `AAA Certificate Services`（Sectigo 的老根）。**这个根不能删**——半个互联网的证书都挂在它下面，删了会连带弄坏正常网站。这种"交叉签名"路径只能等 CA 自己吊销中间证书（CRL/OCSP 生效），而 OpenSSL 默认不做 CRL 检查。
+
+两个操作要点：
+
+- **判断是否还信任，不要 `grep` PEM 文件**：PEM 是 base64，里面没有可读的 CA 名字。要用
+  `openssl crl2pkcs7 -nocrl -certfile /etc/ssl/certs/ca-certificates.crt | openssl pkcs7 -print_certs -noout | grep -i emsign`
+- **固件升级或重装 `ca-bundle` 会把证书装回来**，升级后要复查一次；`tools/distrust-ca.sh` 可以重复执行，已删过的不会再报错。
+
+> 这类"CA 被攻破"的处置原则：**先确认锚点是谁**，能删的删，删不得的（如 AAA）就明确记录为已知风险，别为了看起来干净去删一个承担半个互联网的根。
+
 ---
 
 ## 6. 已知限制 / 未验证
@@ -536,7 +581,8 @@ gh-campus-network/
 │   └── portal-protocol.md         # 门户协议与抓包证据
 └── tools/
     ├── privacy-audit.py           # 发布前自检：手机号/MAC/内网IP/口令/令牌/私钥/身份证/本地路径
-    └── privacy-allowlist.txt      # 允许的「基础设施地址」清单
+    ├── privacy-allowlist.txt      # 允许的「基础设施地址」清单
+    └── distrust-ca.sh             # 按关键字撤销某个 CA（重建 bundle，自动备份）
 ```
 
 ### 8.1 脱敏说明（公开发布前已处理）
@@ -568,6 +614,7 @@ python3 tools/privacy-audit.py .
 - 2026-10-22 发布准备：许可证由 MIT 换成 **PolyForm Noncommercial 1.0.0（禁止商业用途）**，版权人匿名；新增 `LICENSE.zh-CN.md` 与 `.gitignore`；补充合规声明；`tools/privacy-audit.py` 增加访问令牌 / 私钥 / 身份证号检测。
 - 2026-10-22 权利补充：新增 [`NOTICE`](NOTICE)，明确**作者保留全部商业权利**（售卖 / 付费服务 / 商业授权 / 双许可 / 转让），且**商业权利不继承**给 fork、衍生作品与下游；`LICENSE` 的 `Required Notice` 同步写入保留声明，随分发自动传播。
 - 2026-10-22 补充：新增 **§5.3 证书信任库别放到发霉**——`ca-bundle` 版本超过 18 个月应更新、离线升级方式，以及"别塞来路不明的根证书 / 别轻易开 UA3F MITM"两条红线。
+- 2026-10-22 事件处置：新增 **§5.4 撤销 eMudhra / emSign 信任**。实测本机 `curl https://dv-g3b-emudhra.…` 返回 "successfully connected — that's bad!"，说明 2023 年的信任库仍锚定 `emSign ECC Root CA - G3`；已用 `tools/distrust-ca.sh` 删除 4 张 emSign 根证书（140→136），6 个测试域名全部验证失败，正常站点不受影响；经 AAA 交叉签名的链路仍可连，已记录为已知限制。
 
 ---
 

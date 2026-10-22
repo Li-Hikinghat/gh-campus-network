@@ -1,0 +1,16 @@
+# 强制 LF：shell 脚本拷贝到 OpenWrt 后若带 CRLF 会报
+#   /usr/libexec/campus-drcom.sh: not found  (或 Bad address)
+* text=auto eol=lf
+
+*.sh   text eol=lf
+*.init text eol=lf
+*.dsh  text eol=lf
+*.md   text eol=lf
+*.py   text eol=lf
+*.txt  text eol=lf
+LICENSE text eol=lf
+
+*.png  binary
+*.jpg  binary
+*.ipk  binary
+*.7z   binary

@@ -1,0 +1,59 @@
+# NOTICE — 作者保留的商业权利
+
+本项目（gh-campus-network）采用 **PolyForm Noncommercial License 1.0.0**，全文见 [`LICENSE`](LICENSE)。
+本 NOTICE 是许可条款的组成部分，用于明确：**非商业限制只约束使用者，不约束作者本人；且商业权利不随分发、fork 或衍生作品被继承。**
+
+## 1. 作者保留全部商业权利
+
+版权人（下称"作者"）**保留**本项目的全部商业权利，包括但不限于：
+
+- 销售本项目或其副本、衍生版本、打包产品；
+- 提供付费部署、付费咨询、付费支持等商业服务；
+- 将本项目用于自己的商业产品、商业环境或商业项目；
+- 向第三方发放**付费许可 / 商业许可 / 双许可（dual licensing）**；
+- 将本项目整体或部分转让、授权给其他主体（是否转让由作者自行决定）。
+
+上述行为**不受** `LICENSE` 中"非商业用途"限制——该限制只针对从作者处获得副本的使用者。
+
+## 2. 授予他人的权利范围
+
+`LICENSE` 授予使用者的权利是：
+
+- **非独占**（non-exclusive）
+- **不可转让**（non-transferable）
+- **不可再许可**（non-sublicensable）
+
+且只授予**直接从作者或经许可的分发者处收到软件的主体**。
+
+## 3. 商业权利不继承
+
+**任何人都不能继承作者的商业权利。** 具体而言：
+
+- fork、分支、衍生作品、二次开发版本，**不继承**任何商业权利；
+- 下游分发者及其接收者，只获得 `LICENSE` 规定的**非商业许可**，不因拿到代码而获得商用资格；
+- 任何人不得把本项目（含修改版）重新许可为商业许可，也不得声称自己"继承了"作者的商业授权；
+- 作者对某一主体的商业授权，**不自动延伸**到该主体的关联公司、下游客户或后续版本。
+
+> 注：本条不限制作者主动进行的著作权转让。若作者通过书面协议转让著作权，受让人作为新版权人依法行使权利，这**不属于**本条所说的"继承"。
+
+## 4. 其他人如何取得商业授权
+
+除作者本人外，任何主体将本项目用于商业目的，都必须**事先取得作者的单独书面授权**。
+未取得书面授权的商业使用，均属违反 `LICENSE`。
+
+## 5. 与 `LICENSE` 的关系
+
+本 NOTICE 不削减 `LICENSE` 已经授予使用者的非商业权利，只做两点澄清：
+
+1. `LICENSE` 的非商业限制**不适用于作者本人**；
+2. 商业权利**不可继承、不可转让、不可再许可**。
+
+如本 NOTICE 与 `LICENSE` 冲突，就**授予使用者的权利**以 `LICENSE` 为准；就**作者自身权利与商业权利归属**，以本 NOTICE 为准。
+
+---
+
+# English summary (non-authoritative)
+
+The licensor reserves **all commercial rights**, including selling the software, paid services, commercial/dual licensing, and assigning the project. The noncommercial restriction in `LICENSE` binds recipients only, **not the licensor**.
+
+Rights granted to recipients are non-exclusive, non-transferable and non-sublicensable. **No commercial right is inherited**: forks, derivative works, downstream distributors and their recipients receive only the noncommercial license in `LICENSE` and may not relicense the project for commercial use. Anyone other than the licensor needs a separate written commercial license.

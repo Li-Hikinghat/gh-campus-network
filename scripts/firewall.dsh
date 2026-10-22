@@ -1,0 +1,12 @@
+#!/bin/sh
+# Registered as an fw3 include, so it is re-applied on every firewall reload.
+# Teredo (UDP 3544) is a Windows-only IPv6 tunnel: leaving it on while UA3F
+# pretends the traffic comes from an Android phone is a contradiction the
+# campus gateway can fingerprint. Nothing legitimately needs it here.
+
+iptables -C FORWARD -p udp --dport 3544 -j DROP 2>/dev/null || \
+    iptables -I FORWARD -p udp --dport 3544 -j DROP
+iptables -C FORWARD -p udp --sport 3544 -j DROP 2>/dev/null || \
+    iptables -I FORWARD -p udp --sport 3544 -j DROP
+iptables -C OUTPUT -p udp --dport 3544 -j DROP 2>/dev/null || \
+    iptables -I OUTPUT -p udp --dport 3544 -j DROP

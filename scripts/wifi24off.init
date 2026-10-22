@@ -1,0 +1,29 @@
+#!/bin/sh /etc/rc.common
+# Bring the 2.4G AP vif down once the MTK driver has created it.
+# The 5G AP (rax0) and the 2.4G STA (apcli0) are left untouched.
+#
+# Do NOT put `ifconfig ra0 down` in /etc/rc.local: rc.local runs before the
+# mtwifi driver creates ra0, so the command silently fails and the 2.4G SSID
+# keeps broadcasting.
+START=99
+STOP=01
+USE_PROCD=1
+
+start_service() {
+    procd_open_instance
+    procd_set_param command /bin/sh -c '
+        i=0
+        while [ $i -lt 30 ]; do
+            if iwinfo ra0 info 2>/dev/null | grep -q "Mode: Master"; then
+                ifconfig ra0 down
+                logger -t wifi24off "2.4G AP ra0 brought down"
+                exit 0
+            fi
+            i=$((i+1))
+            sleep 2
+        done
+        logger -t wifi24off "ra0 not found after 60s"
+    '
+    procd_set_param respawn 3600 3 5
+    procd_close_instance
+}

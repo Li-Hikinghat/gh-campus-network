@@ -1,0 +1,43 @@
+# ---- 本机 / 路由器运行时产物（可能含账号、密码、MAC、内网地址）----
+*.bak
+*.bak.*
+*.pcap
+*.pcapng
+*.ck
+*.last
+campus-drcom.ck
+campus-drcom.last
+campus-guard.state
+privacy-audit-report.txt
+
+# ---- 抓包、凭据、私钥（永远不要提交）----
+*.key
+*.pem
+*.p12
+*.pfx
+id_rsa*
+id_ed25519*
+.env
+.env.*
+secrets.*
+credentials.*
+
+# ---- 编辑器 / 系统 ----
+.DS_Store
+Thumbs.db
+desktop.ini
+.idea/
+.vscode/
+*.swp
+*~
+__pycache__/
+*.py[cod]
+
+# ---- 打包产物 ----
+*.7z
+*.zip
+*.tar
+*.tar.gz
+*.tgz
+*.ipk
+*.apk

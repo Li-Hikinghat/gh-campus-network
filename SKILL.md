@@ -244,6 +244,16 @@ uci commit network
 验证：`zone_wan_input` 结尾应为 `src_REJECT`；`0.0.0.0` 监听应消失（只剩 `192.168.1.1` / `127.0.0.1`）；`ip maddr show dev <WAN> | grep -c 224.0.0.251` 为 0。
 改完确认 `probe=204`、`baidu=200`、UA3F 规则数不变。
 
+顺手看一眼 **CA 信任库时效**（只影响路由器自己发起的 HTTPS，不影响手机电脑）：
+
+```sh
+opkg list-installed | grep ca-bundle
+# ca-bundle - 20230311-1     ← 版本里的日期 > 18 个月就该考虑更新
+```
+
+更新优先靠 `sysupgrade`；不能刷机就 sideload `ca-bundle` / `ca-certificates`（`Architecture: all`，不挑架构）。
+两条红线：**不要手工往 `/etc/ssl/certs` 塞来路不明的根证书**；**不要轻易给 UA3F 开 `--mitm`**——那等于自己造一张 CA，所有终端都要信任它。
+
 ## 验收清单
 
 - [ ] `generate_204` = 204
@@ -254,6 +264,7 @@ uci commit network
 - [ ] 抓包：单一源 IP、TTL 全 64、SYN 无 TS
 - [ ] `zone_wan_input` 结尾是 `src_REJECT`，`0.0.0.0` 上无管理端口暴露（第 8 步）
 - [ ] `network.campus.hostname='*'`，`ip maddr show dev <WAN>` 不含 `224.0.0.251`
+- [ ] `ca-bundle` 版本日期不超过 18 个月，`/etc/ssl/certs` 里没有手工塞进去的根证书
 - [ ] **已向用户说明剩余破绽**（UDP / HTTPS SNI / IPv6 / TLS 指纹 / 并发规模，见 `README.md` §5.1），不要让用户误以为已经"隐身"
 - [ ] 断电重启后以上全部自动恢复
 

@@ -5,7 +5,7 @@
 > 
 > **校园网运营商：中国移动（已实测通过）。电信尚不清楚、未验证**，见第 6 节。
 > **本项目由 DSH 助力完成** —— 从抓包定位门户协议、修复 UA3F 崩溃循环，到双出口看门狗与 WiFi 排障，全部过程在对话中逐步验证落地。2026-10。
->
+> 
 > **许可证：[PolyForm Noncommercial 1.0.0](LICENSE)（禁止商业用途）。** 它是 **source-available**，不是 OSI 定义的开源许可证，详见第 11 节。
 > **作者保留全部商业权利**（可自行售卖、付费服务、商业授权/双许可），且该等权利**不继承**给 fork、衍生作品与下游使用者，见 [`NOTICE`](NOTICE)。
 > **免责：仅供个人学习研究，请遵守学校校园网管理规定，风险自负。** 见第 7 节。
@@ -19,14 +19,14 @@
 
 ### 必须满足（按优先级）
 
-| # | 能力 | 为什么必须 | 怎么验 |
-|---|---|---|---|
-| 1 | **nftables**（`CONFIG_NF_TABLES=y`）+ `nft` 命令 | UA3F 3.x 的现代后端，有它就不需要 NFQUEUE | `which nft && nft list ruleset` |
-| 2 | **或** NFQUEUE（`CONFIG_NETFILTER_XT_TARGET_NFQUEUE=m/y`） | 老内核的退路：UA3F 的 `desync`/`tcpts` 靠它 | `zcat /proc/config.gz \| grep NFQUEUE` |
-| 3 | `xt_TPROXY` 或 `nft_tproxy` | TPROXY 透明代理必需 | `ls /lib/modules/$(uname -r)/ \| grep -i tproxy` |
-| 4 | `ipset` | UA3F 用 ipset 维护 LAN / 跳过表 | `which ipset` |
-| 5 | 能用的包管理器 + 源 | 装 UA3F 及其依赖 | `opkg update` 或 `apk update` **不报错** |
-| 6 | 独立 WAN 口（不是单网口） | 校园网进、LAN 出，物理隔离 | `cat /etc/board.json` 看 `wan.device` |
+| #   | 能力                                                      | 为什么必须                             | 怎么验                                              |
+| --- | ------------------------------------------------------- | --------------------------------- | ------------------------------------------------ |
+| 1   | **nftables**（`CONFIG_NF_TABLES=y`）+ `nft` 命令            | UA3F 3.x 的现代后端，有它就不需要 NFQUEUE     | `which nft && nft list ruleset`                  |
+| 2   | **或** NFQUEUE（`CONFIG_NETFILTER_XT_TARGET_NFQUEUE=m/y`） | 老内核的退路：UA3F 的 `desync`/`tcpts` 靠它 | `zcat /proc/config.gz \| grep NFQUEUE`           |
+| 3   | `xt_TPROXY` 或 `nft_tproxy`                              | TPROXY 透明代理必需                     | `ls /lib/modules/$(uname -r)/ \| grep -i tproxy` |
+| 4   | `ipset`                                                 | UA3F 用 ipset 维护 LAN / 跳过表         | `which ipset`                                    |
+| 5   | 能用的包管理器 + 源                                             | 装 UA3F 及其依赖                       | `opkg update` 或 `apk update` **不报错**             |
+| 6   | 独立 WAN 口（不是单网口）                                         | 校园网进、LAN 出，物理隔离                   | `cat /etc/board.json` 看 `wan.device`             |
 
 ### 加分项
 
@@ -270,6 +270,131 @@ VHT_BW=2                  # 80MHz
 
 关 2.4G AP（保留 5G AP 和 2.4G STA）：用 `scripts/wifi24off.init`。**不要写进 `/etc/rc.local`**——那时驱动还没建出 `ra0`，命令会静默失败。
 
+### 3.7 造福隔壁宿舍：把 2.4G 做成"透明 AP"，让同学各自认证
+
+**起因：校园网WiFi在我们这层楼只能协商到5MBPS，跟滚木一样，所以顺手开了2.4g频段，作为校园网无线ap节点开放给大家使用。****
+
+适用场景**：你有自己的账号，同学也有各自的账号，大家都想用这台路由器上网，但**不想共享你的账号。
+
+做法是让 2.4G 的 AP 直接桥到校园口（二层桥），客户端从校园 DHCP 拿地址、自己在门户登录：
+
+```
+2.4G AP ──┐
+          ├── br-campus ── eth0.2 ── 校园网     ← 无 NAT、无 UA3F、各自认证
+路由器的校园 IP ┘
+
+5G AP / 以太网 ── br-lan（NAT）── br-campus      ← 仍走你的账号 + UA3F 改写
+```
+
+两个频段互不影响：2.4G 是"透明 AP"，5G 和网口还是原来的 NAT + 反检测。
+
+#### 先验证：校园端口允不许多个 MAC
+
+这一步决定方案成不成——很多校园网端口做了 MAC 绑定。**不用动 WiFi、不用动 WAN**，在 `eth0.2` 上开个不同 MAC 的 macvlan 发 DHCP 即可：
+
+```sh
+ip link add link eth0.2 name mactest0 type macvlan mode bridge
+ip link set mactest0 address aa:bb:cc:dd:ee:55
+ip link set mactest0 up
+udhcpc -i mactest0 -n -q -t 3 -T 4 -s /bin/true
+ip link del mactest0
+```
+
+- 拿到 `lease of 10.x.x.x obtained` → 端口允许多 MAC，方案可行；
+- 超时无响应 → 端口做了绑定，AP 模式走不通（此时别浪费时间）。
+
+#### 落地步骤
+
+```sh
+# 1) 开放 SSID（改 .dat，必须重启才生效；本机 iwpriv 被驱动禁用）
+sed -i 's/^SSID1=.*/SSID1=<你的开放SSID>/'   /etc/wireless/mediatek/mt7981.dbdc.b0.dat
+sed -i 's/^AuthMode=.*/AuthMode=OPEN/'      /etc/wireless/mediatek/mt7981.dbdc.b0.dat
+sed -i 's/^EncrypType=.*/EncrypType=NONE/'  /etc/wireless/mediatek/mt7981.dbdc.b0.dat
+
+# 2) 建桥，把校园口挂上去
+uci set network.br_campus=device
+uci set network.br_campus.name='br-campus'
+uci set network.br_campus.type='bridge'
+uci add_list network.br_campus.ports='eth0.2'
+uci set network.campus.device='br-campus'
+uci commit network
+
+# 3) 守进程自适应接口（见 pitfalls#1），关掉 2.4G 的关闭脚本
+uci set campus-drcom.main.iface='br-campus'
+uci commit campus-drcom
+/etc/init.d/wifi24off disable
+
+# 4) 装开机钩子：把 ra0 从 br-lan 挪到 br-campus
+cp scripts/apbridge.init /etc/init.d/apbridge && chmod 755 /etc/init.d/apbridge
+/etc/init.d/apbridge enable
+
+# 5) ★ 装自动回退（见 pitfalls#3）
+cp /etc/config/network /etc/config/network.good
+cp scripts/netguard.init /etc/init.d/netguard && chmod 755 /etc/init.d/netguard
+/etc/init.d/netguard enable
+
+reboot
+```
+
+开机后应该看到：
+
+```sh
+ubus call network.interface.campus status | grep l3_device   # -> "br-campus"
+ls /sys/class/net/br-campus/brif/                            # -> eth0.2 ra0
+iwinfo ra0 info | head -1                                     # -> ESSID "<你的开放SSID>"
+curl -s -o /dev/null -w '%{http_code}\n' http://connect.rom.miui.com/generate_204   # 204
+```
+
+再验证"桥后面的客户端能不能拿地址"（不需要真手机）：
+
+```sh
+ip link add link br-campus name mtest type macvlan mode bridge
+ip link set mtest address aa:bb:cc:dd:ee:66 && ip link set mtest up
+udhcpc -i mtest -n -q -t 3 -T 5 -s /bin/true     # 期望拿到 10.x.x.x
+ip link del mtest
+```
+
+#### 三个必须知道的坑
+
+**坑 1：守进程比接口早一步 → 退避 120 秒，看起来像"断网"**
+
+开机会话日志：
+
+```
+13:10:00  campus: lease of 10.244.x.x obtained        ← 接口刚 up
+13:10:00  campus-drcom: no IPv4 on eth0.2 yet, skip    ← 它早了一秒
+13:10:00  next retry in 120s                           ← 直接退避 2 分钟
+```
+
+对策：在守进程循环里把"接口还没 IP"当成**短等**而不是失败（`sleep 10; continue`），别计入退避。修完实测开机 **14 秒**完成认证。
+
+**坑 2：开机钩子用 procd 会 crash loop**
+
+`apbridge` 是一次性任务，干完就 `exit 0`；procd 会不停重拉它，6 次后判定 crash loop。改成 `start() { ( ... ) & }` 的普通后台任务，不要 `procd_open_instance`。
+
+**坑 3：没有回退 = 一次改错就全家断网**
+
+用 `scripts/netguard.init`：开机 3 分钟后若 `generate_204` 仍不是 204，就把 `/etc/config/network.good`（改之前验证过能上网的那份）恢复并 reload。即使人不在、SSH 也不通，路由器也会自己回到能上网的状态。
+
+#### 回退
+
+```sh
+cp /etc/config/network.good /etc/config/network
+uci set campus-drcom.main.iface='eth0.2'
+uci commit campus-drcom; uci commit network
+/etc/init.d/apbridge disable
+brctl delif br-campus ra0 2>/dev/null
+brctl addif br-lan ra0 2>/dev/null
+/etc/init.d/network reload
+```
+
+#### 注意事项
+
+- **开放 SSID 等于对整栋楼开放**：没账号的人连上也上不了网，但会占你的无线资源；只给熟人用建议加回密码。
+- **2.4G 客户端不受 UA3F 保护**：它们是真设备直连校园网，UA/TTL/TS 全是自己的特征。这是 AP 模式的固有属性，也是这个方案的意义所在。
+- **依赖"端口允许多 MAC"**：学校一旦做端口安全，2.4G 客户端会集体拿不到地址（5G 和网口不受影响）。
+- **桥接流量不过 iptables**：`br_netfilter` 未加载时（`bridge-nf-call-iptables=0`）桥接帧不经过 netfilter，所以 UA3F 不会碰它们；如果哪天这个开关被打开，2.4G 客户端的流量会被 TPROXY 劫持——出问题先查这个。
+
 ---
 
 ## 4. 踩坑清单
@@ -312,11 +437,11 @@ VHT_BW=2                  # 80MHz
 
 学校可能在凌晨 0–7 点断网。三个组件在这段时间的行为：
 
-| 组件 | 宵禁期间的行为 |
-|---|---|
+| 组件             | 宵禁期间的行为                                                       |
+| -------------- | ------------------------------------------------------------- |
 | `campus-guard` | 校园口连续 3 次探测失败（约 60s）→ 自动回退热点；之后每 30s 探测一次，**网络恢复后 1 分钟内自动切回** |
-| `campus-drcom` | 指数退避：10s → 20s → … → 600s；连续失败 8 次后拉长到 **1800s**（每半小时一次） |
-| 空闲时 | 只做一次 `generate_204` 探测（约 1KB），不产生多余流量 |
+| `campus-drcom` | 指数退避：10s → 20s → … → 600s；连续失败 8 次后拉长到 **1800s**（每半小时一次）      |
+| 空闲时            | 只做一次 `generate_204` 探测（约 1KB），不产生多余流量                         |
 
 **唯一的风险点**：如果宵禁只是"踢下线"、门户仍然返回 302，认证脚本会整夜反复 POST 密码（最坏 42 次/夜），可能触发门户风控或账号异常告警。
 如果你的学校是这种情况，建议开启**夜间静默**：
@@ -333,7 +458,6 @@ uci commit campus-drcom
 
 - 如果夜里手机热点也关了，回退后确实没有出口——但这是"本来就没网"，不是脚本把网络弄坏了；等校园网恢复或热点重新打开，会自动回来。
 - 宵禁期间 DHCP 续租可能让 netifd 把校园默认路由重新加回来，`campus-guard` 会在 60s 内再次判定并回退，期间最多闪断 1 分钟——这是可接受的抖动，不要误以为脚本坏了。
-
 
 ---
 
@@ -355,17 +479,17 @@ uci commit campus-drcom
 上面打勾的只是"能改的那几项"。以下是**截至 2026-10 仍然存在的破绽**，按被识别的可能性排序。
 不写清楚这些，后来的人会误以为"配完就隐身了"。
 
-| # | 破绽 | 严重度 | 现状（实测/机理） | 能不能补 |
-|---|---|---|---|---|
-| 1 | **UDP 完全不受控** | 高 | UA3F 只接管 TCP，UDP 是纯 NAT。90 秒实测 **238 条 UDP 流**，典型如笔记本用同一源端口 `63312` 打 42 个公网 IP 的 `3378/udp`（P2P 特征） | 只能用隧道整体封装，或别在这条线路上跑 P2P |
-| 2 | **HTTPS 的 SNI / 目标域名** | 高 | TLS 是端到端的，UA3F 只转发字节。校园能看到 `steamcommunity.com`、`windowsupdate.com` 这类"PC 才会访问"的域名 | 需开 MITM（要装 CA，麻烦且影响安全）或隧道 |
-| 3 | **IPv6 一旦下发就摊牌** | 高（目前未发生） | 现在 LAN 只有 `fdba:` 内网 ULA，所以没泄漏；若校园或路由器给 LAN 下发公网前缀，**每台设备一个独立 global 地址**，等于直接自报家门 | 需关闭 LAN IPv6 / RA / 前缀委派 |
-| 4 | **TLS 指纹（JA3/JA4）** | 中高 | ClientHello 的 cipher/extension 顺序由客户端 OS+浏览器决定，UA3F 不改。多设备的 ClientHello 会呈现多种指纹 | 需 MITM，或统一到一个浏览器内核出口 |
-| 5 | **并发连接规模** | 中 | 90 秒内 **264 个不同目的 IP、300 条 TCP 流**；单台手机很难达到这个量级 | 无解，属行为特征；减少设备/减少常驻应用能压低 |
-| 6 | **WAN 侧 DHCP 指纹** | 中 | 路由器用 busybox `udhcpc` 发 DHCP，option 55 请求列表是路由器特征，不像 Android 客户端 | 可改（`reqopts`/`vendorid`），**我们没做** |
-| 7 | **应用层行为** | 中 | 手机自带 SDK 会做各种探测（实测抓到手机向 5 个公网 IP 的 **TCP/7** 建连，握手完成后 FIN）；笔记本有 P2P 扇出 | 只能在设备侧关应用，路由器看不出是哪个 App |
-| 8 | **IPv4 IPID** | 中低 | 内核无 `xt_IPID`、无 `NET_ACT_PEDIT`、无 `NET_CLS_BPF`，**无法改写**。实测每条流随机起跳，与普通 Linux 手机一致；TCP 侧已因 UA3F 终结而统一，残留主要在 UDP | 不可修（除非换带 xt_IPID 的固件/内核） |
-| 9 | **TCP 层 DPI 对抗** | 中低 | 本机内核没编 NFQUEUE，UA3F 的 `desync` / `tcpts` 全关，没法做 TCP 行为规避 | 需换固件（nftables 内核） |
+| #   | 破绽                     | 严重度      | 现状（实测/机理）                                                                                                      | 能不能补                              |
+| --- | ---------------------- | -------- | -------------------------------------------------------------------------------------------------------------- | --------------------------------- |
+| 1   | **UDP 完全不受控**          | 高        | UA3F 只接管 TCP，UDP 是纯 NAT。90 秒实测 **238 条 UDP 流**，典型如笔记本用同一源端口 `63312` 打 42 个公网 IP 的 `3378/udp`（P2P 特征）           | 只能用隧道整体封装，或别在这条线路上跑 P2P           |
+| 2   | **HTTPS 的 SNI / 目标域名** | 高        | TLS 是端到端的，UA3F 只转发字节。校园能看到 `steamcommunity.com`、`windowsupdate.com` 这类"PC 才会访问"的域名                             | 需开 MITM（要装 CA，麻烦且影响安全）或隧道         |
+| 3   | **IPv6 一旦下发就摊牌**       | 高（目前未发生） | 现在 LAN 只有 `fdba:` 内网 ULA，所以没泄漏；若校园或路由器给 LAN 下发公网前缀，**每台设备一个独立 global 地址**，等于直接自报家门                             | 需关闭 LAN IPv6 / RA / 前缀委派          |
+| 4   | **TLS 指纹（JA3/JA4）**    | 中高       | ClientHello 的 cipher/extension 顺序由客户端 OS+浏览器决定，UA3F 不改。多设备的 ClientHello 会呈现多种指纹                                | 需 MITM，或统一到一个浏览器内核出口              |
+| 5   | **并发连接规模**             | 中        | 90 秒内 **264 个不同目的 IP、300 条 TCP 流**；单台手机很难达到这个量级                                                                | 无解，属行为特征；减少设备/减少常驻应用能压低           |
+| 6   | **WAN 侧 DHCP 指纹**      | 中        | 路由器用 busybox `udhcpc` 发 DHCP，option 55 请求列表是路由器特征，不像 Android 客户端                                               | 可改（`reqopts`/`vendorid`），**我们没做** |
+| 7   | **应用层行为**              | 中        | 手机自带 SDK 会做各种探测（实测抓到手机向 5 个公网 IP 的 **TCP/7** 建连，握手完成后 FIN）；笔记本有 P2P 扇出                                         | 只能在设备侧关应用，路由器看不出是哪个 App           |
+| 8   | **IPv4 IPID**          | 中低       | 内核无 `xt_IPID`、无 `NET_ACT_PEDIT`、无 `NET_CLS_BPF`，**无法改写**。实测每条流随机起跳，与普通 Linux 手机一致；TCP 侧已因 UA3F 终结而统一，残留主要在 UDP | 不可修（除非换带 xt_IPID 的固件/内核）          |
+| 9   | **TCP 层 DPI 对抗**       | 中低       | 本机内核没编 NFQUEUE，UA3F 的 `desync` / `tcpts` 全关，没法做 TCP 行为规避                                                       | 需换固件（nftables 内核）                 |
 
 **为什么补不全**：UA3F 的本质是「TCP 代理 + HTTP 头改写」，不是「整机虚拟化」。
 它能让校园看到的 **TCP 连接**看起来像一台安卓手机，但改变不了：
@@ -396,15 +520,15 @@ tcpdump -i <WAN> -nn 'tcp[tcpflags] & tcp-syn != 0' | wc -l
 
 **2026-10-22 在一台实际在用的设备上查出来的问题**（全部实测）：
 
-| 问题 | 后果 |
-|---|---|
-| `firewall.@defaults[0].input='ACCEPT'` + `zone wan input='ACCEPT'` | WAN 入站**完全不设防**，等于防火墙对校园网敞开 |
-| uhttpd 监听 `0.0.0.0:80/443` | LuCI 登录页对校园网可见，realm 直接写着 `ImmortalWrt` |
-| haproxy 监听 `0.0.0.0:81/444/60000` | 发行版自带的示例配置（后端指向不存在的 `192.168.1.x`），白白开了三个口 |
-| wsdd2 监听 `0.0.0.0:3702/5355` | WS-Discovery 里宣告 `vendor:sn,model:X3002-MB/SN_R1` —— **硬件型号直接广播** |
-| dnsmasq 监听 `10.244.x.x:53` | 同网段可达 → 变成校园网里的开放解析器 |
-| DHCP 未设 `hostname` | `dhcp.sh` 默认回落到系统名，把 **`ImmortalWrt`** 报给校园 DHCP |
-| avahi 在所有接口发 mDNS | 对外宣告 **`ImmortalWrt.local`** |
+| 问题                                                                 | 后果                                                                |
+| ------------------------------------------------------------------ | ----------------------------------------------------------------- |
+| `firewall.@defaults[0].input='ACCEPT'` + `zone wan input='ACCEPT'` | WAN 入站**完全不设防**，等于防火墙对校园网敞开                                       |
+| uhttpd 监听 `0.0.0.0:80/443`                                         | LuCI 登录页对校园网可见，realm 直接写着 `ImmortalWrt`                           |
+| haproxy 监听 `0.0.0.0:81/444/60000`                                  | 发行版自带的示例配置（后端指向不存在的 `192.168.1.x`），白白开了三个口                        |
+| wsdd2 监听 `0.0.0.0:3702/5355`                                       | WS-Discovery 里宣告 `vendor:sn,model:X3002-MB/SN_R1` —— **硬件型号直接广播** |
+| dnsmasq 监听 `10.244.x.x:53`                                         | 同网段可达 → 变成校园网里的开放解析器                                              |
+| DHCP 未设 `hostname`                                                 | `dhcp.sh` 默认回落到系统名，把 **`ImmortalWrt`** 报给校园 DHCP                  |
+| avahi 在所有接口发 mDNS                                                  | 对外宣告 **`ImmortalWrt.local`**                                      |
 
 对应的加固（已在实际设备上验证；全部可回滚，改前会自动备份 `/etc/config/*.bak.<时间戳>`）：
 
@@ -517,11 +641,11 @@ sh tools/distrust-ca.sh emSign --apply  # 执行
 
 实测结果（本机，2026-10-22）：
 
-| 测试域名 | 移除前 | 移除后 |
-|---|---|---|
+| 测试域名                                                            | 移除前 | 移除后             |
+| --------------------------------------------------------------- | --- | --------------- |
 | `dv-g3b/dv-g3c/ov-g3b/ov-g3c/ev-g3b/ev-g3c-emudhra.…`（emSign 链） | 200 | **验证失败（000）** ✅ |
-| `*-aaa-emudhra.…`（经 AAA 交叉签名的链） | 200 | **仍然 200** ⚠️ |
-| baidu / qq / aliyun / mirrors.ustc | 200 | 200 |
+| `*-aaa-emudhra.…`（经 AAA 交叉签名的链）                                 | 200 | **仍然 200** ⚠️   |
+| baidu / qq / aliyun / mirrors.ustc                              | 200 | 200             |
 
 移除的 4 张根证书：`emSign ECC Root CA - C3`、`emSign ECC Root CA - G3`、`emSign Root CA - C1`、`emSign Root CA - G1`（bundle 从 140 张降到 136 张）。
 
@@ -575,6 +699,8 @@ gh-campus-network/
 │   ├── campus-guard.sh            # 出口看门狗（3 次失败回退热点，恢复后自动切回）
 │   ├── campus-guard.init          # procd 包装
 │   ├── wifi24off.init             # 关 2.4G AP（等 ra0 出现再 down）
+│   ├── apbridge.init              # 开机把 ra0 挪进 br-campus（一次性任务）
+│   ├── netguard.init              # 开机 3 分钟无网 → 自动回退 network.good
 │   ├── firewall.dsh               # 封 Teredo
 │   └── install.sh                 # 一键安装（默认不切换出口）
 ├── reference/
@@ -615,19 +741,20 @@ python3 tools/privacy-audit.py .
 - 2026-10-22 权利补充：新增 [`NOTICE`](NOTICE)，明确**作者保留全部商业权利**（售卖 / 付费服务 / 商业授权 / 双许可 / 转让），且**商业权利不继承**给 fork、衍生作品与下游；`LICENSE` 的 `Required Notice` 同步写入保留声明，随分发自动传播。
 - 2026-10-22 补充：新增 **§5.3 证书信任库别放到发霉**——`ca-bundle` 版本超过 18 个月应更新、离线升级方式，以及"别塞来路不明的根证书 / 别轻易开 UA3F MITM"两条红线。
 - 2026-10-22 事件处置：新增 **§5.4 撤销 eMudhra / emSign 信任**。实测本机 `curl https://dv-g3b-emudhra.…` 返回 "successfully connected — that's bad!"，说明 2023 年的信任库仍锚定 `emSign ECC Root CA - G3`；已用 `tools/distrust-ca.sh` 删除 4 张 emSign 根证书（140→136），6 个测试域名全部验证失败，正常站点不受影响；经 AAA 交叉签名的链路仍可连，已记录为已知限制。
+- 2026-10-23 新增 **§3.7 透明 AP 模式**：2.4G 桥接校园口、客户端各自认证，与 NAT/UA3F 并存互不影响。含多 MAC 前置验证（macvlan 实测拿到校园地址）、落地步骤、桥后客户端的 DHCP 验证，以及三个坑：守进程早于接口导致 120s 退避、apbridge 用 procd 会 crash loop、缺回退导致一次改错全断网（新增 `netguard` 自动回退）。
 
 ---
 
 ## 10. 友情链接
 
-| 项目 | 地址 | 说明 |
-|---|---|---|
-| **UA3F** | https://github.com/SunBK201/UA3F | 本文的核心组件：HTTP 头重写 / 反共享检测，作者 SunBK201 |
-| UA3F Releases | https://github.com/SunBK201/UA3F/releases | 下载 ipk/apk 的地方；注意先看后缀和架构 |
-| **OpenWrt** | https://openwrt.org/ | 上游项目，文档、Wiki、硬件支持列表 |
-| OpenWrt 固件选择器 | https://firmware-selector.openwrt.org/ | 按型号查官方固件，买设备前可以先查"有没有官方支持" |
-| **ImmortalWrt** | https://immortalwrt.org/ | 国内常用的 OpenWrt 分支，中文软件包更全 |
-| ImmortalWrt 下载 | https://downloads.immortalwrt.org/ | 按 target 找固件；建议选 24.10 及以上（自带 nftables） |
+| 项目              | 地址                                        | 说明                                      |
+| --------------- | ----------------------------------------- | --------------------------------------- |
+| **UA3F**        | https://github.com/SunBK201/UA3F          | 本文的核心组件：HTTP 头重写 / 反共享检测，作者 SunBK201    |
+| UA3F Releases   | https://github.com/SunBK201/UA3F/releases | 下载 ipk/apk 的地方；注意先看后缀和架构                |
+| **OpenWrt**     | https://openwrt.org/                      | 上游项目，文档、Wiki、硬件支持列表                     |
+| OpenWrt 固件选择器   | https://firmware-selector.openwrt.org/    | 按型号查官方固件，买设备前可以先查"有没有官方支持"              |
+| **ImmortalWrt** | https://immortalwrt.org/                  | 国内常用的 OpenWrt 分支，中文软件包更全                |
+| ImmortalWrt 下载  | https://downloads.immortalwrt.org/        | 按 target 找固件；建议选 24.10 及以上（自带 nftables） |
 
 > 鸣谢：UA3F 让"宿舍路由器 + 校园网"这件事变得可行；OpenWrt / ImmortalWrt 提供了可折腾的底座。
 > 本文档由 DSH 协助整理，献给广航后来的同学——少踩一个坑，就是省一晚上。
@@ -639,15 +766,15 @@ python3 tools/privacy-audit.py .
 本项目采用 **[PolyForm Noncommercial License 1.0.0](LICENSE)**，版权人写作 `gh-campus-network contributors`（匿名）。
 中文说明见 [`LICENSE.zh-CN.md`](LICENSE.zh-CN.md)，**以英文 `LICENSE` 为准**。
 
-| | 允许 | 不允许 |
-|---|---|---|
-| 个人学习 / 实验 / 毕设课程作业 | ✅ | |
-| 学校、公益、公立科研机构内部使用 | ✅ | |
-| 修改、fork、非商业转发（附许可证） | ✅ | |
-| **作者本人**售卖 / 付费服务 / 商业授权 / 双许可 | ✅（作者保留） | |
-| 其他人的商业使用、付费服务、引流变现 | | ❌ |
-| fork / 衍生作品 / 下游分发者继承商业权利 | | ❌ |
-| 去掉版权声明 / 改换成 MIT、GPL 等 | | ❌ |
+|                                | 允许      | 不允许 |
+| ------------------------------ | ------- | --- |
+| 个人学习 / 实验 / 毕设课程作业             | ✅       |     |
+| 学校、公益、公立科研机构内部使用               | ✅       |     |
+| 修改、fork、非商业转发（附许可证）            | ✅       |     |
+| **作者本人**售卖 / 付费服务 / 商业授权 / 双许可 | ✅（作者保留） |     |
+| 其他人的商业使用、付费服务、引流变现             |         | ❌   |
+| fork / 衍生作品 / 下游分发者继承商业权利      |         | ❌   |
+| 去掉版权声明 / 改换成 MIT、GPL 等         |         | ❌   |
 
 三点必须说清楚：
 
@@ -657,4 +784,3 @@ python3 tools/privacy-audit.py .
 
 **商业权利不继承。** fork、衍生作品、下游分发者及其接收者，只拿到 `LICENSE` 规定的非商业许可，不因持有代码而获得商用资格，也不能把项目改成商业许可。
 除版权人本人外，任何主体商用都需另行取得书面授权（当前仓库未提供联系方式）。
-

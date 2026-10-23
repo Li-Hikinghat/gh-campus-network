@@ -1,0 +1,25 @@
+#!/bin/sh /etc/rc.common
+# 开机把 ra0 从 br-lan 挪到 br-campus（校园网二层）。
+# 一次性任务，不用 procd（用 procd respawn 会因为它秒退而判定 crash loop）。
+START=99
+STOP=01
+
+start() {
+    (
+        i=0
+        while [ $i -lt 40 ]; do
+            if iwinfo ra0 info 2>/dev/null | grep -q "Mode: Master"; then
+                brctl delif br-lan ra0 2>/dev/null
+                brctl addif br-campus ra0 2>/dev/null && \
+                    logger -t apbridge "ra0 -> br-campus ok"
+                ifconfig ra0 up 2>/dev/null
+                exit 0
+            fi
+            i=$((i+1))
+            sleep 3
+        done
+        logger -t apbridge "ra0 not found after 120s"
+    ) &
+}
+
+stop() { :; }

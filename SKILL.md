@@ -273,6 +273,64 @@ curl -sS https://dv-g3b-emudhra.we-have-a-problem.com/
 经它签发的中间 CA 只能等 CA 自己吊销，OpenSSL 默认不查 CRL，这种情况如实记为已知风险。
 固件升级或重装 `ca-bundle` 会把证书装回来，升级后复查一次。
 
+## 第 9 步（可选）：2.4G 做透明 AP，让同学各自认证
+
+场景：用户想把自己的路由器当 AP，让其他有校园账号的人连 2.4G 后**各自在门户登录**，不共享账号、不走本机 NAT/UA3F。
+
+**先验证端口允许多 MAC**（不做这步后面全是白工）：
+
+```sh
+ip link add link eth0.2 name mactest0 type macvlan mode bridge
+ip link set mactest0 address aa:bb:cc:dd:ee:55
+ip link set mactest0 up
+udhcpc -i mactest0 -n -q -t 3 -T 4 -s /bin/true    # 拿到 10.x.x.x 才可行
+ip link del mactest0
+```
+
+拿到租约后再动手，**顺序不能反**：
+
+```sh
+# 1) 先让守进程/看门狗自适应接口（脚本已读 ubus l3_device，无需改）
+# 2) 开放 SSID（.dat，必须重启生效；多数 MTK 固件 iwpriv 被禁）
+sed -i 's/^SSID1=.*/SSID1=<开放SSID>/'      /etc/wireless/mediatek/mt7981.dbdc.b0.dat
+sed -i 's/^AuthMode=.*/AuthMode=OPEN/'     /etc/wireless/mediatek/mt7981.dbdc.b0.dat
+sed -i 's/^EncrypType=.*/EncrypType=NONE/' /etc/wireless/mediatek/mt7981.dbdc.b0.dat
+
+# 3) 建桥
+uci set network.br_campus=device; uci set network.br_campus.name='br-campus'
+uci set network.br_campus.type='bridge'; uci add_list network.br_campus.ports='eth0.2'
+uci set network.campus.device='br-campus'; uci commit network
+
+# 4) 钩子 + 自动回退（这两个是硬性要求，见 pitfalls）
+cp scripts/apbridge.init /etc/init.d/apbridge && chmod 755 /etc/init.d/apbridge && /etc/init.d/apbridge enable
+cp /etc/config/network /etc/config/network.good      # 必须先存"已验证能上网"的那份
+cp scripts/netguard.init /etc/init.d/netguard && chmod 755 /etc/init.d/netguard && /etc/init.d/netguard enable
+/etc/init.d/wifi24off disable
+reboot
+```
+
+验收：`l3_device=br-campus`、`br-campus` 成员含 `eth0.2 ra0`、`iwinfo ra0` 显示开放 SSID、`generate_204=204`；
+再用 macvlan 挂在 `br-campus` 上跑 `udhcpc`，能拿到 `10.x.x.x` 就说明桥后面的客户端可用。
+
+**三个必踩的坑（都已修，别改回去）**：
+
+1. **守进程比接口早一步** → 它把"没有 IP"当失败，退避 120 秒，表现为"开机后两分钟没网"。
+   必须在循环里 `if [ -z "$(iface_ip)" ]; then sleep 10; continue; fi`。
+2. **apbridge 不能用 procd**：一次性任务 `exit 0` 会被反复拉起，6 次后 crash loop。用 `start() { ( ... ) & }`。
+3. **必须装 netguard**：开机 3 分钟仍无网就恢复 `network.good`。否则改错一次，人不在现场就只能拔电。
+
+回退：
+
+```sh
+cp /etc/config/network.good /etc/config/network
+uci set campus-drcom.main.iface='eth0.2'; uci commit campus-drcom; uci commit network
+/etc/init.d/apbridge disable
+brctl delif br-campus ra0 2>/dev/null; brctl addif br-lan ra0 2>/dev/null
+/etc/init.d/network reload
+```
+
+**提醒用户**：开放 SSID = 对整栋楼开放；2.4G 客户端不受 UA3F 保护（这正是 AP 模式的意义）；一旦学校做端口 MAC 绑定，2.4G 客户端会集体失效。
+
 ## 验收清单
 
 - [ ] `generate_204` = 204
@@ -286,6 +344,7 @@ curl -sS https://dv-g3b-emudhra.we-have-a-problem.com/
 - [ ] `ca-bundle` 版本日期不超过 18 个月，`/etc/ssl/certs` 里没有手工塞进去的根证书
 - [ ] 已知被攻破的 CA 已撤销：`curl https://dv-g3b-emudhra.we-have-a-problem.com/` 必须**失败**
 - [ ] **已向用户说明剩余破绽**（UDP / HTTPS SNI / IPv6 / TLS 指纹 / 并发规模，见 `README.md` §5.1），不要让用户误以为已经"隐身"
+- [ ] 若做了 AP 模式：`l3_device=br-campus`、成员含 `eth0.2 ra0`、桥后 macvlan 能拿到校园 IP、`netguard` 已启用
 - [ ] 断电重启后以上全部自动恢复
 
 ## 回滚

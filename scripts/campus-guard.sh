@@ -7,7 +7,7 @@
 
 CHECK_HOST=connect.rom.miui.com
 CHECK_PATH=/generate_204
-CAMPUS_IF=eth0.2
+CAMPUS_IF=eth0.2          # 每轮会被 netifd 的实际 l3_device 覆盖
 STATE=/tmp/campus-guard.state
 INTERVAL=20
 FALLBACK_INTERVAL=30
@@ -73,6 +73,11 @@ dead=0
 log "started on $CAMPUS_IF (interval ${INTERVAL}s, fallback after ${DEAD_LIMIT} strikes)"
 
 while :; do
+    # 跟随 netifd 实际把校园网 L3 挂在哪（eth0.2 或桥接后的 br-campus）
+    L3=$(ubus call network.interface.campus status 2>/dev/null \
+        | sed -n 's/.*"l3_device": "\([^"]*\)".*/\1/p' | head -1)
+    [ -n "$L3" ] && CAMPUS_IF=$L3
+
     if [ -f "$STATE" ]; then
         code=$(probe_campus)
         case "$code" in

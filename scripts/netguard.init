@@ -1,0 +1,47 @@
+#!/bin/sh /etc/rc.common
+# 开机保险：3 分钟后如果还没网，自动回退到 /etc/config/network.good。
+# 这是给"改拓扑"这类高风险操作准备的兜底——即使我不在、SSH 也不通，
+# 路由器也会自己回到能上网的状态。
+START=98
+STOP=01
+
+start() {
+    (
+        sleep 180
+
+        # 只在"确实处于改造后的拓扑"时才考虑回退
+        if [ ! -d /sys/class/net/br-campus ]; then
+            logger -t netguard "no br-campus, nothing to guard"
+            exit 0
+        fi
+
+        p=$(curl -s -m 8 -o /dev/null -w '%{http_code}' \
+            http://connect.rom.miui.com/generate_204 2>/dev/null)
+        if [ "$p" = "204" ]; then
+            logger -t netguard "internet OK (204)"
+            exit 0
+        fi
+
+        logger -t netguard "no internet after boot (probe=$p) -> revert"
+        if [ ! -f /etc/config/network.good ]; then
+            logger -t netguard "network.good missing, cannot revert"
+            exit 0
+        fi
+
+        cp /etc/config/network /etc/config/network.failed 2>/dev/null
+        cp /etc/config/network.good /etc/config/network
+        uci -q set campus-drcom.main.iface='eth0.2'
+        uci -q commit campus-drcom
+        uci -q commit network
+        /etc/init.d/apbridge disable 2>/dev/null
+        /etc/init.d/network reload >/dev/null 2>&1 &
+        sleep 20
+        /etc/init.d/campus-drcom restart >/dev/null 2>&1
+        sleep 10
+        p2=$(curl -s -m 8 -o /dev/null -w '%{http_code}' \
+            http://connect.rom.miui.com/generate_204 2>/dev/null)
+        logger -t netguard "after revert: probe=$p2"
+    ) &
+}
+
+stop() { :; }

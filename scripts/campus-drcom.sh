@@ -16,6 +16,10 @@ get() { uci -q get "$NAME.main.$1"; }
 
 load_creds() {
     IFACE=$(get iface);            IFACE=${IFACE:-eth0.2}
+    # 跟随 netifd 实际把校园网 L3 挂在哪（eth0.2 或桥接后的 br-campus）
+    L3=$(ubus call network.interface.campus status 2>/dev/null \
+        | sed -n 's/.*"l3_device": "\([^"]*\)".*/\1/p' | head -1)
+    [ -n "$L3" ] && IFACE=$L3
     PORTAL=$(get portal);          PORTAL=${PORTAL:-http://1.1.1.1:8888}
     ACIP=$(get acip);              ACIP=${ACIP:-1.1.1.1}
     ACNAME=$(get acname);          ACNAME=${ACNAME:-hhxy}
@@ -155,6 +159,13 @@ while :; do
     if [ "$ENABLED" != "1" ]; then
         log "disabled in config, idling"
         sleep 60
+        continue
+    fi
+
+    # 接口还没拿到地址（刚开机 / 刚换桥）时，短等重试，不要当成认证失败去退避
+    if [ -z "$(iface_ip)" ]; then
+        log "waiting for IPv4 on $IFACE (link not ready yet)"
+        sleep 10
         continue
     fi
 

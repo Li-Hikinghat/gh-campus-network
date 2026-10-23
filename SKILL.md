@@ -33,13 +33,13 @@ opkg update 2>&1 | tail -3      # 或 apk update
 
 判定表：
 
-| 检查结果 | 结论 |
-|---|---|
-| 有 nftables + nft_tproxy | ✅ 理想，UA3F 用 nft 后端，`tcpts` 也能用 |
-| 无 nftables 但有 `CONFIG_NETFILTER_XT_TARGET_NFQUEUE` | ⚠️ 可用，但 `tcpts`/`desync` 会依赖 NFQUEUE，仍需谨慎 |
-| 两者都没有（本文设备就是） | ❌ UA3F 只能以 `tcpts=0`、`desync=0` 运行；TCP 时间戳只能靠 `sysctl net.ipv4.tcp_timestamps=0` 绕 |
-| `opkg update` 大面积 404 | ❌ 所有包只能本地 sideload，方案会麻烦很多 |
-| 没有独立 WAN 口 / 没有 `nft` 也没有 `iptables` | ❌ 不建议继续 |
+| 检查结果                                               | 结论                                                                                 |
+| -------------------------------------------------- | ---------------------------------------------------------------------------------- |
+| 有 nftables + nft_tproxy                            | ✅ 理想，UA3F 用 nft 后端，`tcpts` 也能用                                                     |
+| 无 nftables 但有 `CONFIG_NETFILTER_XT_TARGET_NFQUEUE` | ⚠️ 可用，但 `tcpts`/`desync` 会依赖 NFQUEUE，仍需谨慎                                          |
+| 两者都没有（本文设备就是）                                      | ❌ UA3F 只能以 `tcpts=0`、`desync=0` 运行；TCP 时间戳只能靠 `sysctl net.ipv4.tcp_timestamps=0` 绕 |
+| `opkg update` 大面积 404                              | ❌ 所有包只能本地 sideload，方案会麻烦很多                                                         |
+| 没有独立 WAN 口 / 没有 `nft` 也没有 `iptables`               | ❌ 不建议继续                                                                            |
 
 附加筛选条件（避免重复踩坑）：
 
@@ -54,6 +54,7 @@ opkg update 2>&1 | tail -3      # 或 apk update
 - 认证成功后路由器断网、或校园网被"多设备检测"限制
 - UA3F 装不上 / 一启动就崩 / 反复重启
 - 5G WiFi 能搜到但手机连不上超时
+- 无线校园网速度低到无法使用
 
 ## 环境假设（先核实，不要假设）
 
@@ -275,7 +276,7 @@ curl -sS https://dv-g3b-emudhra.we-have-a-problem.com/
 
 ## 第 9 步（可选）：2.4G 做透明 AP，让同学各自认证
 
-场景：用户想把自己的路由器当 AP，让其他有校园账号的人连 2.4G 后**各自在门户登录**，不共享账号、不走本机 NAT/UA3F。
+场景：校园网WiFi速度太低，无法使用，用户想把自己的路由器当 AP，让有校园账号的人连 2.4G 后**各自在门户登录**，不共享账号、不走本机 NAT/UA3F。
 
 **先验证端口允许多 MAC**（不做这步后面全是白工）：
 

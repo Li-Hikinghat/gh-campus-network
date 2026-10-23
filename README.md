@@ -395,6 +395,53 @@ brctl addif br-lan ra0 2>/dev/null
 - **依赖"端口允许多 MAC"**：学校一旦做端口安全，2.4G 客户端会集体拿不到地址（5G 和网口不受影响）。
 - **桥接流量不过 iptables**：`br_netfilter` 未加载时（`bridge-nf-call-iptables=0`）桥接帧不经过 netfilter，所以 UA3F 不会碰它们；如果哪天这个开关被打开，2.4G 客户端的流量会被 TPROXY 劫持——出问题先查这个。
 
+### 3.8 状态监控面板（可选，不用装任何包）
+
+软件源死了装不了 `luci-app-statistics`，而 shell + uhttpd 已经能做出一块够用的实时面板：
+
+```
+/usr/sbin/monitor-daemon   每 1 秒读 /proc、/sys → 写 /tmp/monitor.json（tmpfs，不磨闪存）
+/www/cgi-bin/monitor       uhttpd CGI，原样吐出这份 JSON（Cache-Control: no-store）
+/www/monitor/index.html    单文件页面，fetch + canvas 画曲线，无任何外部依赖（离线可用）
+```
+
+打开 `http://<路由器 LAN IP>/monitor/`。
+
+**面板内容**：CPU 占用/温度/负载、内存、系统存储（`/` 与 `/tmp`）、连接数（conntrack）、WAN/LAN 实时上下行、累计流量；
+如果挂了 eMMC/U 盘，还会多一张卡：**硬盘读写速率、累计读写、已用/剩余容量、eMMC 健康度（磨损档位与寿命状态）**。
+底部有**刷新间隔滑块**（1.0–3.0 秒，步进 0.1），选择存在 localStorage；曲线固定保留最近 3 分钟。
+
+安装：
+
+```sh
+# 把 monitor/ 目录整个传到路由器，然后
+sh monitor/install.sh
+```
+
+**实测开销**：常驻进程 RSS ≈ 1.8 MB，CPU 占用 0%（top 里看不到）。
+
+#### 四个坑（都踩过）
+
+1. **busybox 没有亚秒 sleep**：`sleep 0.5` 报 `invalid number`，`usleep` 没编进去，`timeout 0.3` 也只认整秒。
+   一开始按 0.5 秒写，`$NAP` 每次都失败 → **采集进程变成死循环空转**，CPU 拉满、`up` 字段不再变化。最终固定 1 秒采样，滑块下限设成 1.0。
+2. **`awk` 的 `getline var` 不会拆分字段**：`getline l < "/proc/meminfo"` 之后 `$2` 是空（`$0` 还停留在主输入），内存会一直显示 0。必须 `split(l, arr, " ")`。
+3. **速率别用 `systime()` 算**：它只有整秒精度，采样间隔小于 1 秒时 `dt` 会算成 0 或 1，速度直接错一倍。用 `/proc/uptime` 第一列（厘秒精度）作为时间基准。
+4. **uhttpd 的 CGI 要放在 `cgi_prefix` 目录并带执行位**：`/www/cgi-bin/monitor` 必须 `chmod 755`，否则 403/500；页面本身则坚决不要引 CDN——宿舍断网时面板就废了。
+
+#### 自定义
+
+- 采集器开头的 `SHARE_DIR`（默认 `/mnt/546share`）指向要显示容量的挂载点，`DEV`（默认 `mmcblk0`）指向要看 I/O 与健康度的块设备；
+- 想看别的传感器的温度，把 `/sys/class/thermal/thermal_zone0/temp` 换成对应 zone；
+- eMMC 的 `life_time` / `pre_eol_info` 来自 `/sys/block/<dev>/device/`，U 盘和机械盘没有这两个文件，卡片会自动只显示容量与速率。
+
+#### 回滚
+
+```sh
+/etc/init.d/monitor stop; /etc/init.d/monitor disable
+rm -f /usr/sbin/monitor-daemon /etc/init.d/monitor /www/cgi-bin/monitor
+rm -rf /www/monitor
+```
+
 ---
 
 ## 4. 踩坑清单
@@ -705,6 +752,12 @@ gh-campus-network/
 │   └── install.sh                 # 一键安装（默认不切换出口）
 ├── reference/
 │   └── portal-protocol.md         # 门户协议与抓包证据
+├── monitor/                       # 状态监控面板（纯 shell + uhttpd CGI）
+│   ├── monitor-daemon             # 1 秒采样 /proc /sys → /tmp/monitor.json
+│   ├── monitor.init               # procd 包装
+│   ├── cgi-monitor                # 输出 JSON 的 CGI
+│   ├── index.html                 # 单文件面板（无外部依赖）
+│   └── install.sh                 # 一键安装
 └── tools/
     ├── privacy-audit.py           # 发布前自检：手机号/MAC/内网IP/口令/令牌/私钥/身份证/本地路径
     ├── privacy-allowlist.txt      # 允许的「基础设施地址」清单
@@ -741,6 +794,7 @@ python3 tools/privacy-audit.py .
 - 2026-10-22 权利补充：新增 [`NOTICE`](NOTICE)，明确**作者保留全部商业权利**（售卖 / 付费服务 / 商业授权 / 双许可 / 转让），且**商业权利不继承**给 fork、衍生作品与下游；`LICENSE` 的 `Required Notice` 同步写入保留声明，随分发自动传播。
 - 2026-10-22 补充：新增 **§5.3 证书信任库别放到发霉**——`ca-bundle` 版本超过 18 个月应更新、离线升级方式，以及"别塞来路不明的根证书 / 别轻易开 UA3F MITM"两条红线。
 - 2026-10-22 事件处置：新增 **§5.4 撤销 eMudhra / emSign 信任**。实测本机 `curl https://dv-g3b-emudhra.…` 返回 "successfully connected — that's bad!"，说明 2023 年的信任库仍锚定 `emSign ECC Root CA - G3`；已用 `tools/distrust-ca.sh` 删除 4 张 emSign 根证书（140→136），6 个测试域名全部验证失败，正常站点不受影响；经 AAA 交叉签名的链路仍可连，已记录为已知限制。
+- 2026-10-23 新增 **§3.8 状态监控面板** 与 `monitor/` 目录：纯 shell 采集 + uhttpd CGI + 单文件页面，不装任何包；覆盖 CPU/温度/负载、内存、存储、连接数、WAN/LAN 速率、累计流量，以及 eMMC 的读写速率、容量、健康度。记录了四个坑：busybox 无亚秒 sleep（写成 0.5s 会空转打满 CPU）、`awk getline` 不拆字段、`systime()` 整秒粒度算速率会错、CGI 执行位与离线依赖。
 - 2026-10-23 新增 **§3.7 透明 AP 模式**：2.4G 桥接校园口、客户端各自认证，与 NAT/UA3F 并存互不影响。含多 MAC 前置验证（macvlan 实测拿到校园地址）、落地步骤、桥后客户端的 DHCP 验证，以及三个坑：守进程早于接口导致 120s 退避、apbridge 用 procd 会 crash loop、缺回退导致一次改错全断网（新增 `netguard` 自动回退）。
 
 ---

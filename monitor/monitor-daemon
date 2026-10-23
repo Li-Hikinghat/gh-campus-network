@@ -1,0 +1,164 @@
+#!/bin/sh
+# 0.5 秒采样的监控数据收集器，输出 /tmp/monitor.json
+# 时间基准用 /proc/uptime（厘秒精度），保证 0.5s 采样时速率计算准确。
+
+OUT=/tmp/monitor.json
+TMP=/tmp/monitor.json.tmp
+LAN_IF=${LAN_IF:-br-lan}
+WAN_IF=${WAN_IF:-br-campus}
+SHARE_DIR=${SHARE_DIR:-/mnt/546share}
+DEV=${DEV:-mmcblk0}
+
+# 本机 busybox 不支持亚秒 sleep（无 usleep、sleep 不认小数），所以固定 1 秒采样
+NAP="sleep 1"
+
+s_rx=0
+s_tx=0
+cnt=0
+disk='{"root":{"used":0,"total":1,"pct":0},"tmp":{"used":0,"total":1,"pct":0}}'
+share='{"used":0,"total":1,"avail":0,"pct":0}'
+emmc='{"life":"-","eol":"-"}'
+
+ptotal=0; pidle=0; pnow=0
+pwr=0; pwt=0; plr=0; plt=0
+pdrd=0; pdwr=0
+
+while :; do
+    if [ $((cnt % 10)) -eq 0 ]; then
+        w=$(ip route show default 2>/dev/null | awk 'NR==1{print $5}')
+        [ -n "$w" ] && WAN_IF=$w
+
+        r=$(df -k / 2>/dev/null | awk 'NR==2{print $3" "$2}')
+        t=$(df -k /tmp 2>/dev/null | awk 'NR==2{print $3" "$2}')
+        ru=${r% *}; rt=${r#* }
+        tu=${t% *}; tt=${t#* }
+        disk=$(printf '{"root":{"used":%s,"total":%s,"pct":%.1f},"tmp":{"used":%s,"total":%s,"pct":%.1f}}' \
+            "${ru:-0}" "${rt:-1}" \
+            "$(awk -v u="${ru:-0}" -v t="${rt:-1}" 'BEGIN{print (t>0)?100*u/t:0}')" \
+            "${tu:-0}" "${tt:-1}" \
+            "$(awk -v u="${tu:-0}" -v t="${tt:-1}" 'BEGIN{print (t>0)?100*u/t:0}')")
+
+        sh=$(df -k "$SHARE_DIR" 2>/dev/null | awk 'NR==2{print $3" "$2" "$4}')
+        if [ -n "$sh" ]; then
+            set -- $sh
+            share=$(printf '{"used":%s,"total":%s,"avail":%s,"pct":%.1f}' \
+                "$1" "$2" "$(awk -v u="$1" -v t="$2" 'BEGIN{print (t>0)?100*u/t:0}')")
+        fi
+
+        D=/sys/block/$DEV/device
+        if [ -r "$D/life_time" ]; then
+            emmc=$(printf '{"life":"%s","eol":"%s"}' \
+                "$(cat "$D/life_time" 2>/dev/null)" "$(cat "$D/pre_eol_info" 2>/dev/null)")
+        fi
+    fi
+
+    out=$(awk -v ptotal="$ptotal" -v pidle="$pidle" -v pnow="$pnow" \
+              -v pwr="$pwr" -v pwt="$pwt" -v plr="$plr" -v plt="$plt" \
+              -v pdrd="$pdrd" -v pdwr="$pdwr" \
+              -v srxa="$s_rx" -v stxa="$s_tx" -v disk="$disk" -v share="$share" -v emmc="$emmc" \
+              -v wan="$WAN_IF" -v lan="$LAN_IF" -v dev="$DEV" '
+    BEGIN {
+        epoch = systime()
+
+        # 厘秒精度的时间基准（uptime 第一列）
+        getline uw < "/proc/uptime"
+        split(uw, uwa, " ")
+        nowf = uwa[1] + 0
+
+        # --- CPU ---
+        getline s < "/proc/stat"
+        split(s, a, " ")
+        total = 0
+        for (i = 2; i <= 9; i++) total += a[i]
+        idle = a[5] + a[6]
+
+        # --- 网卡 ---
+        wr = 0; wt = 0; lr = 0; lt = 0
+        while ((getline l < "/proc/net/dev") > 0) {
+            if (index(l, wan ":") > 0) { split(l, b, " "); wr = b[2] + 0; wt = b[10] + 0 }
+            if (index(l, lan ":") > 0) { split(l, b, " "); lr = b[2] + 0; lt = b[10] + 0 }
+        }
+
+        # --- 磁盘 I/O（sectors * 512）---
+        drd = 0; dwr = 0
+        if ((getline ds < ("/sys/block/" dev "/stat")) > 0) {
+            split(ds, d, " ")
+            drd = d[3] * 512
+            dwr = d[7] * 512
+        }
+
+        # --- 内存 ---
+        mt = 0; ma = 0
+        while ((getline l < "/proc/meminfo") > 0) {
+            split(l, mv, " ")
+            if (l ~ /^MemTotal:/) mt = mv[2] + 0
+            if (l ~ /^MemAvailable:/) ma = mv[2] + 0
+            if (mt && ma) break
+        }
+
+        # --- 温度 / 连接数 / 负载 ---
+        temp = 0
+        if ((getline tv < "/sys/class/thermal/thermal_zone0/temp") > 0) temp = tv / 1000
+
+        conn = 0
+        if ((getline cv < "/proc/sys/net/netfilter/nf_conntrack_count") > 0) conn = cv + 0
+        cmax = 0
+        if ((getline cv2 < "/proc/sys/net/netfilter/nf_conntrack_max") > 0) cmax = cv2 + 0
+
+        getline la < "/proc/loadavg"
+        split(la, lav, " ")
+
+        # --- 计算 ---
+        dtotal = total - ptotal
+        didle = idle - pidle
+        usage = (dtotal > 0) ? 100 * (dtotal - didle) / dtotal : 0
+
+        dt = nowf - pnow
+        if (dt <= 0 || dt > 60) dt = 1
+
+        rx = (wr - pwr) / dt; if (rx < 0) rx = 0
+        tx = (wt - pwt) / dt; if (tx < 0) tx = 0
+        lrx = (lr - plr) / dt; if (lrx < 0) lrx = 0
+        ltx = (lt - plt) / dt; if (lt < 0) ltx = 0
+        dio_r = (drd - pdrd) / dt; if (dio_r < 0) dio_r = 0
+        dio_w = (dwr - pdwr) / dt; if (dio_w < 0) dio_w = 0
+
+        used = mt - ma
+
+        printf "{\"t\":%d,\"up\":%.0f,\"cpu\":{\"usage\":%.1f,\"temp\":%.1f,\"load\":[%s,%s,%s]},", \
+            epoch, nowf, usage, temp, lav[1], lav[2], lav[3]
+        printf "\"mem\":{\"total\":%.0f,\"avail\":%.0f,\"used\":%.0f,\"pct\":%.1f},", \
+            mt, ma, used, (mt > 0) ? 100 * used / mt : 0
+        printf "\"disk\":%s,", disk
+        printf "\"share\":%s,", share
+        printf "\"net\":{\"wan\":{\"rx\":%.0f,\"tx\":%.0f,\"rx_total\":%.0f,\"tx_total\":%.0f},", \
+            rx, tx, wr, wt
+        printf "\"lan\":{\"rx\":%.0f,\"tx\":%.0f,\"rx_total\":%.0f,\"tx_total\":%.0f},", \
+            lrx, ltx, lr, lt
+        printf "\"s_rx\":%.0f,\"s_tx\":%.0f},", srxa + rx * dt, stxa + tx * dt
+        printf "\"conn\":{\"n\":%.0f,\"max\":%.0f},", conn, cmax
+        printf "\"dio\":{\"r\":%.0f,\"w\":%.0f,\"r_total\":%.0f,\"w_total\":%.0f},", \
+            dio_r, dio_w, drd, dwr
+        printf "\"emmc\":%s}\n", emmc
+
+        printf "%.0f %.0f %.3f %.0f %.0f %.0f %.0f %.0f %.0f\n", \
+            total, idle, nowf, wr, wt, lr, lt, drd, dwr > "/dev/stderr"
+    }' 2>/tmp/monitor.state)
+
+    [ -n "$out" ] && printf '%s\n' "$out" > "$TMP" && mv "$TMP" "$OUT"
+
+    if [ -s /tmp/monitor.state ]; then
+        set -- $(cat /tmp/monitor.state)
+        ptotal=${1:-0}; pidle=${2:-0}; pnow=${3:-0}
+        pwr=${4:-0}; pwt=${5:-0}; plr=${6:-0}; plt=${7:-0}
+        pdrd=${8:-0}; pdwr=${9:-0}
+    fi
+
+    sr=$(printf '%s' "$out" | sed -n 's/.*"s_rx":\([0-9]*\).*/\1/p')
+    st=$(printf '%s' "$out" | sed -n 's/.*"s_tx":\([0-9]*\).*/\1/p')
+    [ -n "$sr" ] && s_rx=$sr
+    [ -n "$st" ] && s_tx=$st
+
+    cnt=$((cnt + 1))
+    $NAP
+done

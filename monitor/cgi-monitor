@@ -1,0 +1,10 @@
+#!/bin/sh
+# 监控数据的 JSON 接口（由 uhttpd 以 CGI 调用）
+printf 'Content-Type: application/json\r\n'
+printf 'Cache-Control: no-store\r\n'
+printf '\r\n'
+if [ -s /tmp/monitor.json ]; then
+    cat /tmp/monitor.json
+else
+    printf '{"err":"collector not running"}\n'
+fi

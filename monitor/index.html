@@ -1,0 +1,315 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>路由器状态</title>
+<style>
+  :root{
+    --bg:#12151a; --card:#1b2028; --line:#2a313c; --fg:#e6edf3; --dim:#8b98a9;
+    --blue:#4aa3ff; --green:#3ddc84; --orange:#ffb020; --red:#ff5d5d; --purple:#b58cff;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;padding:18px;background:var(--bg);color:var(--fg);
+       font:14px/1.5 -apple-system,"Segoe UI","Microsoft YaHei",sans-serif}
+  header{display:flex;align-items:baseline;gap:14px;margin-bottom:16px;flex-wrap:wrap}
+  h1{font-size:18px;margin:0;font-weight:600}
+  .meta{color:var(--dim);font-size:12px}
+  .grid{display:grid;gap:14px;grid-template-columns:repeat(auto-fit,minmax(260px,1fr))}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:14px 16px}
+  .card h2{font-size:12px;color:var(--dim);margin:0 0 8px;font-weight:500;letter-spacing:.04em}
+  .big{font-size:30px;font-weight:600;line-height:1.1;font-variant-numeric:tabular-nums}
+  .unit{font-size:14px;color:var(--dim);margin-left:2px;font-weight:400}
+  .row{display:flex;justify-content:space-between;gap:10px;margin-top:6px;font-size:12px;color:var(--dim)}
+  .row b{color:var(--fg);font-weight:500;font-variant-numeric:tabular-nums}
+  canvas{width:100%;height:44px;display:block;margin-top:10px}
+  .bar{height:6px;background:#0d1015;border-radius:3px;overflow:hidden;margin-top:8px}
+  .bar>i{display:block;height:100%;width:0;background:var(--blue);transition:width .3s}
+  .bar.mem>i{background:var(--purple)} .bar.disk>i{background:var(--orange)} .bar.conn>i{background:var(--green)}
+  .stat{display:flex;justify-content:space-between;padding:4px 0;border-top:1px dashed var(--line);font-size:12px}
+  .stat:first-of-type{border-top:0}
+  .stat span{color:var(--dim)} .stat b{font-weight:500;font-variant-numeric:tabular-nums}
+  .dot{width:7px;height:7px;border-radius:50%;display:inline-block;margin-right:6px;background:var(--red)}
+  .dot.ok{background:var(--green)}
+  .ok-color{color:var(--green)} .warn-color{color:var(--orange)}
+  .ctrl{margin-top:14px;display:flex;align-items:center;gap:16px;flex-wrap:wrap}
+  .ctrl label{font-size:12px;color:var(--dim);white-space:nowrap}
+  .ctrl output{font-variant-numeric:tabular-nums;color:var(--fg);font-weight:600;min-width:64px;display:inline-block}
+  input[type=range]{
+    -webkit-appearance:none;appearance:none;flex:1;min-width:220px;height:6px;border-radius:3px;
+    background:linear-gradient(to right,var(--blue) 0%,var(--blue) var(--fill,60%),#0d1015 var(--fill,60%),#0d1015 100%);
+    outline:none;cursor:pointer;
+  }
+  input[type=range]::-webkit-slider-thumb{
+    -webkit-appearance:none;width:16px;height:16px;border-radius:50%;background:#fff;
+    border:2px solid var(--blue);box-shadow:0 0 6px rgba(74,163,255,.6);
+  }
+  input[type=range]::-moz-range-thumb{
+    width:16px;height:16px;border-radius:50%;background:#fff;border:2px solid var(--blue);
+  }
+  .ticks{display:flex;justify-content:space-between;font-size:11px;color:var(--dim);margin-top:4px}
+</style>
+</head>
+<body>
+<header>
+  <h1>路由器状态</h1>
+  <span class="meta"><span id="dot" class="dot"></span><span id="state">连接中…</span></span>
+  <span class="meta">运行 <b id="uptime">—</b></span>
+  <span class="meta">刷新 <b id="ivhead">2.0</b> 秒</span>
+  <span class="meta" id="clock"></span>
+</header>
+
+<div class="grid">
+  <div class="card">
+    <h2>CPU</h2>
+    <div class="big"><span id="cpu">—</span><span class="unit">%</span></div>
+    <div class="bar"><i id="cpu_bar" style="background:var(--blue)"></i></div>
+    <div class="row"><span>温度 <b id="temp">—</b></span><span>负载 <b id="load">—</b></span></div>
+    <canvas id="c_cpu"></canvas>
+  </div>
+
+  <div class="card">
+    <h2>内存</h2>
+    <div class="big"><span id="mem_pct">—</span><span class="unit">%</span></div>
+    <div class="bar mem"><i id="mem_bar"></i></div>
+    <div class="row"><span>已用 <b id="mem_used">—</b></span><span>可用 <b id="mem_avail">—</b></span></div>
+    <canvas id="c_mem"></canvas>
+  </div>
+
+  <div class="card">
+    <h2>系统存储</h2>
+    <div class="big"><span id="disk_pct">—</span><span class="unit">% 根分区</span></div>
+    <div class="bar disk"><i id="disk_bar"></i></div>
+    <div class="stat"><span>根分区</span><b id="disk_root">—</b></div>
+    <div class="stat"><span>/tmp</span><b id="disk_tmp">—</b></div>
+  </div>
+
+  <div class="card">
+    <h2>硬盘 eMMC（546share）</h2>
+    <div class="big"><span id="dio_total">—</span><span class="unit">/s</span></div>
+    <div class="row"><span>读 <b id="dio_r">—</b>/s</span><span>写 <b id="dio_w">—</b>/s</span></div>
+    <div class="bar disk"><i id="share_bar"></i></div>
+    <div class="stat"><span>已用 / 总容量</span><b id="share_used">—</b></div>
+    <div class="stat"><span>剩余可用</span><b id="share_avail">—</b></div>
+    <div class="stat"><span>健康度（磨损）</span><b id="emmc_life">—</b></div>
+    <div class="stat"><span>寿命状态</span><b id="emmc_eol">—</b></div>
+    <canvas id="c_dio"></canvas>
+  </div>
+
+  <div class="card">
+    <h2>连接数</h2>
+    <div class="big"><span id="conn">—</span><span class="unit" id="conn_max"></span></div>
+    <div class="bar conn"><i id="conn_bar"></i></div>
+    <div class="row"><span>占用率 <b id="conn_pct">—</b></span></div>
+    <canvas id="c_conn"></canvas>
+  </div>
+
+  <div class="card">
+    <h2>WAN 实时速率</h2>
+    <div class="big"><span id="wan_rx">—</span><span class="unit">/s ↓</span></div>
+    <div class="row"><span>上传 <b id="wan_tx">—</b>/s</span></div>
+    <canvas id="c_wan"></canvas>
+  </div>
+
+  <div class="card">
+    <h2>LAN 实时速率</h2>
+    <div class="big"><span id="lan_rx">—</span><span class="unit">/s ↓</span></div>
+    <div class="row"><span>上传 <b id="lan_tx">—</b>/s</span></div>
+    <canvas id="c_lan"></canvas>
+  </div>
+
+  <div class="card">
+    <h2>累计流量（自开机）</h2>
+    <div class="stat"><span>WAN 下行</span><b id="t_rx">—</b></div>
+    <div class="stat"><span>WAN 上行</span><b id="t_tx">—</b></div>
+    <div class="stat"><span>硬盘累计读</span><b id="dio_rt">—</b></div>
+    <div class="stat"><span>硬盘累计写</span><b id="dio_wt">—</b></div>
+    <div class="stat"><span>本面板统计</span><b id="t_sess">—</b></div>
+  </div>
+</div>
+
+<div class="card" style="margin-top:14px">
+  <h2>刷新间隔</h2>
+  <div class="ctrl">
+    <label for="iv">1.0 秒</label>
+    <input id="iv" type="range" min="1" max="3" step="0.1" value="2">
+    <label for="iv">3.0 秒</label>
+    <output id="iv_label">2.0 秒</output>
+  </div>
+  <div class="ticks"><span>本机最快 1.0 秒（固件无亚秒 sleep），越慢越省电</span><span>曲线保留最近 3 分钟</span></div>
+</div>
+
+<script>
+const HIST_SECONDS = 180;                       // 曲线覆盖时长
+let interval = parseFloat(localStorage.getItem('monIv')) || 2;
+let MAXPTS = ptsFor(interval);
+const H = {cpu:[], mem:[], conn:[], dioR:[], dioW:[], wanRx:[], wanTx:[], lanRx:[], lanTx:[]};
+
+function ptsFor(iv) { return Math.max(30, Math.round(HIST_SECONDS / iv)); }
+
+const fmtB = n => {
+  if (!isFinite(n) || n < 0) return '—';
+  const u = ['B','KB','MB','GB','TB'];
+  let i = 0;
+  while (n >= 1024 && i < u.length - 1) { n /= 1024; i++; }
+  return (n < 10 && i > 0 ? n.toFixed(1) : Math.round(n)) + u[i];
+};
+const fmtUp = s => {
+  s = Math.floor(s || 0);
+  const d = Math.floor(s / 86400), h = Math.floor(s % 86400 / 3600), m = Math.floor(s % 3600 / 60);
+  return (d ? d + '天' : '') + (h ? h + '时' : '') + m + '分';
+};
+const lifeText = s => {
+  if (!s || !s.startsWith('0x')) return '—';
+  const parts = s.trim().split(/\s+/).map(x => parseInt(x, 16)).filter(x => !isNaN(x));
+  if (!parts.length) return '—';
+  const n = Math.max(...parts);
+  return `${Math.min((n - 1) * 10, 100)}–${Math.min(n * 10, 100)}% 已消耗`;
+};
+const eolText = s => ({'0x01':'正常','0x02':'警告（≥80%）','0x03':'紧急（≥90%）'}[s] || '—');
+
+function draw(id, series) {
+  const cv = document.getElementById(id);
+  const dpr = window.devicePixelRatio || 1;
+  const w = cv.clientWidth, h = cv.clientHeight;
+  if (cv.width !== w * dpr || cv.height !== h * dpr) {
+    cv.width = w * dpr; cv.height = h * dpr;
+  }
+  const ctx = cv.getContext('2d');
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, w, h);
+  const max = Math.max(1, ...series.flat()) * 1.15;
+  const n = Math.max(...series.map(s => s.length), 2);
+  series.forEach((data, si) => {
+    if (data.length < 2) return;
+    const color = ['#4aa3ff','#ffb020','#3ddc84','#b58cff'][si % 4];
+    ctx.beginPath();
+    data.forEach((v, i) => {
+      const x = (i / (n - 1)) * w;
+      const y = h - (v / max) * (h - 4) - 2;
+      i ? ctx.lineTo(x, y) : ctx.moveTo(x, y);
+    });
+    ctx.strokeStyle = color; ctx.lineWidth = 1.6; ctx.lineJoin = 'round'; ctx.stroke();
+    ctx.lineTo(w, h); ctx.lineTo(0, h); ctx.closePath();
+    ctx.fillStyle = color + '14'; ctx.fill();
+  });
+}
+
+let busy = false;
+async function tick() {
+  if (busy) return;
+  busy = true;
+  try {
+    const r = await fetch('/cgi-bin/monitor', {cache: 'no-store'});
+    const d = await r.json();
+    if (d.err) throw new Error(d.err);
+
+    document.getElementById('dot').className = 'dot ok';
+    document.getElementById('state').textContent = '实时';
+    document.getElementById('clock').textContent = new Date().toLocaleTimeString('zh-CN');
+
+    const cpu = d.cpu.usage;
+    document.getElementById('cpu').textContent = cpu.toFixed(1);
+    document.getElementById('cpu_bar').style.width = Math.min(100, cpu) + '%';
+    document.getElementById('temp').textContent = d.cpu.temp.toFixed(1) + ' °C';
+    document.getElementById('load').textContent = d.cpu.load.map(v => (+v).toFixed(2)).join(' / ');
+    document.getElementById('uptime').textContent = fmtUp(d.up);
+
+    document.getElementById('mem_pct').textContent = d.mem.pct.toFixed(1);
+    document.getElementById('mem_bar').style.width = Math.min(100, d.mem.pct) + '%';
+    document.getElementById('mem_used').textContent = fmtB(d.mem.used * 1024);
+    document.getElementById('mem_avail').textContent = fmtB(d.mem.avail * 1024);
+
+    document.getElementById('disk_pct').textContent = d.disk.root.pct.toFixed(1);
+    document.getElementById('disk_bar').style.width = Math.min(100, d.disk.root.pct) + '%';
+    document.getElementById('disk_root').textContent = fmtB(d.disk.root.used * 1024) + ' / ' + fmtB(d.disk.root.total * 1024);
+    document.getElementById('disk_tmp').textContent = fmtB(d.disk.tmp.used * 1024) + ' / ' + fmtB(d.disk.tmp.total * 1024);
+
+    if (d.dio) {
+      document.getElementById('dio_r').textContent = fmtB(d.dio.r);
+      document.getElementById('dio_w').textContent = fmtB(d.dio.w);
+      document.getElementById('dio_total').textContent = fmtB(d.dio.r + d.dio.w);
+      document.getElementById('dio_rt').textContent = fmtB(d.dio.r_total);
+      document.getElementById('dio_wt').textContent = fmtB(d.dio.w_total);
+      H.dioR.push(d.dio.r); H.dioW.push(d.dio.w);
+    }
+    if (d.share) {
+      document.getElementById('share_bar').style.width = Math.min(100, d.share.pct) + '%';
+      document.getElementById('share_used').textContent =
+        fmtB(d.share.used * 1024) + ' / ' + fmtB(d.share.total * 1024);
+      document.getElementById('share_avail').textContent = fmtB(d.share.avail * 1024);
+    }
+    if (d.emmc) {
+      document.getElementById('emmc_life').textContent = lifeText(d.emmc.life);
+      const eol = document.getElementById('emmc_eol');
+      eol.textContent = eolText(d.emmc.eol);
+      eol.className = d.emmc.eol === '0x01' ? 'ok-color' : 'warn-color';
+    }
+
+    const cpct = d.conn.max ? 100 * d.conn.n / d.conn.max : 0;
+    document.getElementById('conn').textContent = d.conn.n;
+    document.getElementById('conn_max').textContent = '/ ' + d.conn.max;
+    document.getElementById('conn_bar').style.width = Math.min(100, cpct) + '%';
+    document.getElementById('conn_pct').textContent = cpct.toFixed(1) + '%';
+
+    const wan = d.net.wan, lan = d.net.lan;
+    document.getElementById('wan_rx').textContent = fmtB(wan.rx);
+    document.getElementById('wan_tx').textContent = fmtB(wan.tx);
+    document.getElementById('lan_rx').textContent = fmtB(lan.rx);
+    document.getElementById('lan_tx').textContent = fmtB(lan.tx);
+    document.getElementById('t_rx').textContent = fmtB(wan.rx_total);
+    document.getElementById('t_tx').textContent = fmtB(wan.tx_total);
+    document.getElementById('t_sess').textContent = '↓' + fmtB(d.net.s_rx) + '  ↑' + fmtB(d.net.s_tx);
+
+    H.cpu.push(cpu); H.mem.push(d.mem.pct); H.conn.push(d.conn.n);
+    H.wanRx.push(wan.rx); H.wanTx.push(wan.tx);
+    H.lanRx.push(lan.rx); H.lanTx.push(lan.tx);
+    for (const k in H) while (H[k].length > MAXPTS) H[k].shift();
+
+    draw('c_cpu', [H.cpu]);
+    draw('c_mem', [H.mem]);
+    draw('c_conn', [H.conn]);
+    draw('c_dio', [H.dioR, H.dioW]);
+    draw('c_wan', [H.wanRx, H.wanTx]);
+    draw('c_lan', [H.lanRx, H.lanTx]);
+  } catch (e) {
+    document.getElementById('dot').className = 'dot';
+    document.getElementById('state').textContent = '数据源断开：' + e.message;
+  } finally {
+    busy = false;
+  }
+}
+
+// ---- 刷新间隔滑块 ----
+const slider = document.getElementById('iv');
+const label = document.getElementById('iv_label');
+const head = document.getElementById('ivhead');
+
+function applyInterval(iv, reset) {
+  interval = Math.min(3, Math.max(1, iv));
+  MAXPTS = ptsFor(interval);
+  label.textContent = interval.toFixed(1) + ' 秒';
+  head.textContent = interval.toFixed(1);
+  slider.value = interval;
+  const fill = ((interval - 1) / 2) * 100;
+  slider.style.setProperty('--fill', fill + '%');
+  localStorage.setItem('monIv', interval);
+  if (timer) clearInterval(timer);
+  timer = setInterval(tick, Math.round(interval * 1000));
+  if (reset) { for (const k in H) H[k].length = 0; tick(); }
+}
+
+let timer = null;
+slider.addEventListener('input', () => applyInterval(parseFloat(slider.value), false));
+slider.addEventListener('change', () => applyInterval(parseFloat(slider.value), true));
+
+applyInterval(interval, true);
+
+window.addEventListener('resize', () => {
+  draw('c_cpu', [H.cpu]); draw('c_mem', [H.mem]); draw('c_conn', [H.conn]);
+  draw('c_dio', [H.dioR, H.dioW]);
+  draw('c_wan', [H.wanRx, H.wanTx]); draw('c_lan', [H.lanRx, H.lanTx]);
+});
+</script>
+</body>
+</html>

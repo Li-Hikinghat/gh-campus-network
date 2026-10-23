@@ -332,6 +332,30 @@ brctl delif br-campus ra0 2>/dev/null; brctl addif br-lan ra0 2>/dev/null
 
 **提醒用户**：开放 SSID = 对整栋楼开放；2.4G 客户端不受 UA3F 保护（这正是 AP 模式的意义）；一旦学校做端口 MAC 绑定，2.4G 客户端会集体失效。
 
+## 第 10 步（可选）：装一个不占资源的状态面板
+
+用户常问"能不能看实时 CPU/温度/网速"。软件源已死，`luci-app-statistics` 装不了，**不要尝试 opkg**——用自带的 uhttpd 就能做：
+
+```sh
+# monitor/ 目录整个传上去
+sh monitor/install.sh
+# 打开 http://<LAN IP>/monitor/
+```
+
+结构：`monitor-daemon`（1 秒采样 → `/tmp/monitor.json`）+ `/www/cgi-bin/monitor`（CGI 吐 JSON）+ `/www/monitor/index.html`（单文件页面，无外部依赖）。
+
+**四个必踩的坑**：
+
+1. **不要用亚秒 sleep**：busybox 的 `sleep` 不认小数，`usleep` 往往没编进去，`timeout 0.3` 也只认整秒。
+   写 `sleep 0.5` 会每次都失败 → 循环变成死转，CPU 打满且 JSON 不再更新（现象：`up` 字段卡住不动）。固定 1 秒最稳；要更快的刷新只能靠前端，且数据不会更细。
+2. **`awk` 的 `getline var` 不拆字段**：`getline l < "/proc/meminfo"` 后 `$2` 是空的（`$0` 仍是主输入）。必须 `split(l, a, " ")` —— 否则内存永远显示 0。
+3. **速率用 `/proc/uptime` 计时**，不要 `systime()`：后者整秒粒度，采样间隔 <1s 时 `dt` 会被算成 0 或 1，速度直接差一倍。
+4. **CGI 要执行位、页面要能离线**：`/www/cgi-bin/monitor` 必须 `chmod 755`；页面别引任何 CDN，宿舍断网时面板就白屏了。
+
+**开销**：RSS ≈ 1.8 MB，CPU ≈ 0%。JSON 落在 `/tmp`（tmpfs），不磨损闪存。
+
+**扩展**：采集器顶部 `SHARE_DIR`（看哪个挂载点的容量）和 `DEV`（看哪块盘的 I/O 与健康度，默认 `mmcblk0`）改一下即可套用到 U 盘/机械盘；eMMC 的 `life_time`/`pre_eol_info` 只在 `/sys/block/<dev>/device/` 存在时才显示。
+
 ## 验收清单
 
 - [ ] `generate_204` = 204
@@ -346,6 +370,7 @@ brctl delif br-campus ra0 2>/dev/null; brctl addif br-lan ra0 2>/dev/null
 - [ ] 已知被攻破的 CA 已撤销：`curl https://dv-g3b-emudhra.we-have-a-problem.com/` 必须**失败**
 - [ ] **已向用户说明剩余破绽**（UDP / HTTPS SNI / IPv6 / TLS 指纹 / 并发规模，见 `README.md` §5.1），不要让用户误以为已经"隐身"
 - [ ] 若做了 AP 模式：`l3_device=br-campus`、成员含 `eth0.2 ra0`、桥后 macvlan 能拿到校园 IP、`netguard` 已启用
+- [ ] 若装了监控：`/cgi-bin/monitor` 返回 200 且 JSON 里 `up` 在变化，`monitor-daemon` 的 CPU 时间不疯涨（没空转）
 - [ ] 断电重启后以上全部自动恢复
 
 ## 回滚

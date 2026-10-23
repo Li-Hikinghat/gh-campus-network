@@ -46,6 +46,9 @@ ALLOW = re.compile(
 SKIP_DIRS = {".git", "tools", "node_modules"}
 SKIP_EXT = {".png", ".jpg", ".jpeg", ".webp", ".gif", ".zip", ".pcap", ".ipk", ".apk", ".pdf"}
 
+# 校验和文件里的长十六进制串常被误判成手机号/身份证号（纯数字巧合），先打码再匹配
+HEX_LONG = re.compile(r"\b[0-9a-fA-F]{32,}\b")
+
 # Documented infrastructure addresses live in privacy-allowlist.txt (one per
 # line, "#" starts a comment). They are campus/OS defaults, not personal data.
 ALLOWLIST_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "privacy-allowlist.txt")
@@ -96,12 +99,14 @@ def main():
                 text = open(path, "r", encoding="utf-8", errors="replace").read()
             except OSError:
                 continue
+            # 先把长哈希替换成占位符，避免把校验和里的数字当成手机号/身份证
+            scan_text = HEX_LONG.sub("<hash>", text)
             for label, rx in PATTERNS.items():
-                for m in rx.finditer(text):
+                for m in rx.finditer(scan_text):
                     value = m.group(1) if rx.groups and m.group(1) else m.group(0)
                     if allowed(label, value):
                         continue
-                    line_no = text[: m.start()].count("\n") + 1
+                    line_no = scan_text[: m.start()].count("\n") + 1
                     line = text.splitlines()[line_no - 1].strip()[:110]
                     hits.append((os.path.relpath(path, ROOT), line_no, label, value, line))
 

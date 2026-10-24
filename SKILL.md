@@ -344,17 +344,32 @@ sh monitor/install.sh
 
 结构：`monitor-daemon`（1 秒采样 → `/tmp/monitor.json`）+ `/www/cgi-bin/monitor`（CGI 吐 JSON）+ `/www/monitor/index.html`（单文件页面，无外部依赖）。
 
-**四个必踩的坑**：
+**面板有这些卡**：CPU（占用/温度/负载）、内存、系统存储、连接数、WAN（含"物理口合计"）、
+LAN（对客户端方向）、无线 5G/2.4G（各自上下行）、累计流量；有 eMMC/U 盘时再加硬盘卡（读写速率、容量、健康度）。
+
+**六个必踩的坑**：
 
 1. **不要用亚秒 sleep**：busybox 的 `sleep` 不认小数，`usleep` 往往没编进去，`timeout 0.3` 也只认整秒。
-   写 `sleep 0.5` 会每次都失败 → 循环变成死转，CPU 打满且 JSON 不再更新（现象：`up` 字段卡住不动）。固定 1 秒最稳；要更快的刷新只能靠前端，且数据不会更细。
+   写 `sleep 0.5` 会每次都失败 → 循环变成死转，CPU 打满且 JSON 不再更新（现象：`up` 字段卡住不动）。固定 1 秒最稳。
 2. **`awk` 的 `getline var` 不拆字段**：`getline l < "/proc/meminfo"` 后 `$2` 是空的（`$0` 仍是主输入）。必须 `split(l, a, " ")` —— 否则内存永远显示 0。
 3. **速率用 `/proc/uptime` 计时**，不要 `systime()`：后者整秒粒度，采样间隔 <1s 时 `dt` 会被算成 0 或 1，速度直接差一倍。
 4. **CGI 要执行位、页面要能离线**：`/www/cgi-bin/monitor` 必须 `chmod 755`；页面别引任何 CDN，宿舍断网时面板就白屏了。
+5. **接口方向极容易标反**（用户第一个反馈几乎都是"速度不对"）：
+   - WAN（`br-campus`）：`rx` = 下行，`tx` = 上行；
+   - LAN（`br-lan`）：`rx` = **客户端发给路由器（上行）**，`tx` = **路由器发给客户端（下行）**；
+   - 无线（`ra0`/`rax0`）：`tx` = **AP 发给客户端（下行）**，`rx` = 客户端发来（上行）。
+   三个接口的方向规则各不相同，照抄必错。实测现象：看视频时"下行 50 KB/s、上行 1 MB/s"，就是把无线 tx/rx 标反了。
+6. **JSON 嵌套别写错**：`phys`/`wifi` 必须是顶层字段；曾经把它们夹在 `"net":{...}` 里面，前端取 `d.wifi` 全是 undefined，卡片一直是"—"。
 
-**开销**：RSS ≈ 1.8 MB，CPU ≈ 0%。JSON 落在 `/tmp`（tmpfs），不磨损闪存。
+**看不见的流量**：`br-campus` 只统计**经过路由**的流量。2.4G 客户端是二层桥到校园网、客户端访问路由器本机服务也是本地转发，
+这些在 WAN 卡上永远是 0 或很低——所以才有独立的**无线卡**（读 `ra0`/`rax0`）和**物理口合计**（读 `eth0`，兜住 MTK HNAT/WARP 硬件加速那部分）。
 
-**扩展**：采集器顶部 `SHARE_DIR`（看哪个挂载点的容量）和 `DEV`（看哪块盘的 I/O 与健康度，默认 `mmcblk0`）改一下即可套用到 U 盘/机械盘；eMMC 的 `life_time`/`pre_eol_info` 只在 `/sys/block/<dev>/device/` 存在时才显示。
+**标定结果**（PC 单线程下载，IP 层 1742 KB/s）：`eth0` 2101（1.21x）、`br-campus` 1950（1.12x）、面板 1905（**1.09x**）。
+即路由转发的流量面板是准的（±10%）；差很多就是"看错卡片"或"流量没走 WAN"。
+
+**开销**：RSS ≈ 1 MB，CPU ≈ 0%。JSON 落在 `/tmp`（tmpfs），不磨损闪存。
+
+**扩展**：采集器顶部的 `DEV`（看哪块盘的 I/O 与健康度，默认 `mmcblk0`）和 `SHARE_DIR`（要显示容量的挂载点）改一下即可套用到 U 盘/机械盘；eMMC 的 `life_time`/`pre_eol_info` 只在 `/sys/block/<dev>/device/` 存在时才显示。
 
 ## 验收清单
 
@@ -371,6 +386,7 @@ sh monitor/install.sh
 - [ ] **已向用户说明剩余破绽**（UDP / HTTPS SNI / IPv6 / TLS 指纹 / 并发规模，见 `README.md` §5.1），不要让用户误以为已经"隐身"
 - [ ] 若做了 AP 模式：`l3_device=br-campus`、成员含 `eth0.2 ra0`、桥后 macvlan 能拿到校园 IP、`netguard` 已启用
 - [ ] 若装了监控：`/cgi-bin/monitor` 返回 200 且 JSON 里 `up` 在变化，`monitor-daemon` 的 CPU 时间不疯涨（没空转）
+- [ ] 若装了监控：**方向核对过**——播放视频时"无线 5G 下行"和"WAN 下行"应同时上涨，而不是只有"上行"涨
 - [ ] 断电重启后以上全部自动恢复
 
 ## 回滚

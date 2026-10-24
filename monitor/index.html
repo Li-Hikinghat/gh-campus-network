@@ -108,14 +108,24 @@
     <h2>WAN 实时速率</h2>
     <div class="big"><span id="wan_rx">—</span><span class="unit">/s ↓</span></div>
     <div class="row"><span>上传 <b id="wan_tx">—</b>/s</span></div>
+    <div class="row"><span>物理口合计 <b id="phys">—</b></span></div>
     <canvas id="c_wan"></canvas>
   </div>
 
   <div class="card">
-    <h2>LAN 实时速率</h2>
-    <div class="big"><span id="lan_rx">—</span><span class="unit">/s ↓</span></div>
-    <div class="row"><span>上传 <b id="lan_tx">—</b>/s</span></div>
+    <h2>LAN 实时速率（对客户端方向）</h2>
+    <div class="big"><span id="lan_tx">—</span><span class="unit">/s ↓ 到客户端</span></div>
+    <div class="row"><span>来自客户端 <b id="lan_rx">—</b>/s ↑</span></div>
     <canvas id="c_lan"></canvas>
+  </div>
+
+  <div class="card">
+    <h2>无线（5G / 2.4G）</h2>
+    <div class="row" style="margin-top:0"><span>5G 下行（到客户端） <b id="w5_down">—</b>/s</span></div>
+    <div class="row" style="margin-top:2px"><span>5G 上行（来自客户端） <b id="w5_up">—</b>/s</span></div>
+    <div class="row" style="margin-top:6px"><span>2.4G 下行 <b id="w24_down">—</b>/s</span></div>
+    <div class="row" style="margin-top:2px"><span>2.4G 上行 <b id="w24_up">—</b>/s</span></div>
+    <canvas id="c_wifi"></canvas>
   </div>
 
   <div class="card">
@@ -143,7 +153,8 @@
 const HIST_SECONDS = 180;                       // 曲线覆盖时长
 let interval = parseFloat(localStorage.getItem('monIv')) || 2;
 let MAXPTS = ptsFor(interval);
-const H = {cpu:[], mem:[], conn:[], dioR:[], dioW:[], wanRx:[], wanTx:[], lanRx:[], lanTx:[]};
+const H = {cpu:[], mem:[], conn:[], dioR:[], dioW:[], wanRx:[], wanTx:[], lanRx:[], lanTx:[],
+           w5Rx:[], w5Tx:[], w24Rx:[], w24Tx:[]};
 
 function ptsFor(iv) { return Math.max(30, Math.round(HIST_SECONDS / iv)); }
 
@@ -255,8 +266,21 @@ async function tick() {
     const wan = d.net.wan, lan = d.net.lan;
     document.getElementById('wan_rx').textContent = fmtB(wan.rx);
     document.getElementById('wan_tx').textContent = fmtB(wan.tx);
+    if (d.phys) document.getElementById('phys').textContent =
+      '↓' + fmtB(d.phys.rx) + '/s  ↑' + fmtB(d.phys.tx) + '/s';
     document.getElementById('lan_rx').textContent = fmtB(lan.rx);
     document.getElementById('lan_tx').textContent = fmtB(lan.tx);
+    if (d.wifi) {
+      // AP 接口方向：tx = 路由器发给客户端（下行），rx = 客户端发来（上行）
+      const w5 = d.wifi.r5, w24 = d.wifi.r24;
+      const w5d = w5.tx, w5u = w5.rx, w24d = w24.tx, w24u = w24.rx;
+      document.getElementById('w5_down').textContent = fmtB(w5d);
+      document.getElementById('w5_up').textContent = fmtB(w5u);
+      document.getElementById('w24_down').textContent = fmtB(w24d);
+      document.getElementById('w24_up').textContent = fmtB(w24u);
+      H.w5Rx.push(w5d); H.w5Tx.push(w5u);
+      H.w24Rx.push(w24d); H.w24Tx.push(w24u);
+    }
     document.getElementById('t_rx').textContent = fmtB(wan.rx_total);
     document.getElementById('t_tx').textContent = fmtB(wan.tx_total);
     document.getElementById('t_sess').textContent = '↓' + fmtB(d.net.s_rx) + '  ↑' + fmtB(d.net.s_tx);
@@ -272,6 +296,7 @@ async function tick() {
     draw('c_dio', [H.dioR, H.dioW]);
     draw('c_wan', [H.wanRx, H.wanTx]);
     draw('c_lan', [H.lanRx, H.lanTx]);
+    draw('c_wifi', [H.w5Rx, H.w5Tx, H.w24Rx, H.w24Tx]);
   } catch (e) {
     document.getElementById('dot').className = 'dot';
     document.getElementById('state').textContent = '数据源断开：' + e.message;
@@ -309,6 +334,7 @@ window.addEventListener('resize', () => {
   draw('c_cpu', [H.cpu]); draw('c_mem', [H.mem]); draw('c_conn', [H.conn]);
   draw('c_dio', [H.dioR, H.dioW]);
   draw('c_wan', [H.wanRx, H.wanTx]); draw('c_lan', [H.lanRx, H.lanTx]);
+  draw('c_wifi', [H.w5Rx, H.w5Tx, H.w24Rx, H.w24Tx]);
 });
 </script>
 </body>
